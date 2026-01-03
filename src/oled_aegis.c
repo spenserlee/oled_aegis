@@ -62,6 +62,7 @@ typedef struct {
     IMMDeviceEnumerator *pAudioEnumerator;
     IMMDevice *pAudioDevice;
     IAudioMeterInformation *pAudioMeter;
+    int isShuttingDown;
 } AppState;
 
 static AppState g_app;
