@@ -341,9 +341,11 @@ LRESULT CALLBACK SettingsDialogProc(HWND hWnd, UINT message, WPARAM wParam, LPAR
                     ApplySettings(hWnd);
                     break;
                 case 1006:
+                    LogMessage("Settings: Opening config file location");
                     OpenConfigFileLocation();
                     break;
                 case 1007:
+                    LogMessage("Settings: Dialog closed via 'Close' button");
                     DestroyWindow(hWnd);
                     g_hSettingsDialog = NULL;
                     break;
@@ -351,6 +353,7 @@ LRESULT CALLBACK SettingsDialogProc(HWND hWnd, UINT message, WPARAM wParam, LPAR
             return 0;
         }
         case WM_CLOSE:
+            LogMessage("Settings: Dialog closed via WM_CLOSE");
             DestroyWindow(hWnd);
             g_hSettingsDialog = NULL;
             return 0;
@@ -452,7 +455,12 @@ void ShowSettingsDialog() {
 void ApplySettings(HWND hWnd) {
     char buffer[32];
     GetDlgItemTextA(hWnd, 1001, buffer, 32);
+    int oldTimeout = g_app.config.idleTimeout;
     g_app.config.idleTimeout = atoi(buffer);
+
+    int oldAudio = g_app.config.audioDetectionEnabled;
+    int oldDebug = g_app.config.debugMode;
+    int oldStartup = g_app.config.startupEnabled;
 
     g_app.config.audioDetectionEnabled = IsDlgButtonChecked(hWnd, 1002) == BST_CHECKED;
     g_app.config.debugMode = IsDlgButtonChecked(hWnd, 1003) == BST_CHECKED;
@@ -464,6 +472,12 @@ void ApplySettings(HWND hWnd) {
 
     SaveConfig();
     UpdateStartupRegistry();
+
+    LogMessage("Settings applied: timeout %ds->%ds, audio %d->%d, debug %d->%d, startup %d->%d",
+             oldTimeout, g_app.config.idleTimeout,
+             oldAudio, g_app.config.audioDetectionEnabled,
+             oldDebug, g_app.config.debugMode,
+             oldStartup, g_app.config.startupEnabled);
 }
 
 void UpdateTrayIcon(int active) {
@@ -547,18 +561,15 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
                 DWORD idleTime = GetIdleTime();
                 int audioPlaying = g_app.config.debugMode ? 0 : IsAudioPlaying();
 
-                LogMessage("Timer: idleTime=%lu, audioPlaying=%d, threshold=%d",
-                         idleTime, audioPlaying, g_app.config.idleTimeout * 1000);
-
                 if (!audioPlaying && idleTime > (DWORD)(g_app.config.idleTimeout * 1000)) {
                     if (!g_app.screenSaverActive) {
-                        LogMessage("Timer: Activating screen saver");
+                        LogMessage("Timer: Activating screen saver (idle: %lums)", idleTime);
                         ShowScreenSaver();
                         UpdateTrayIcon(1);
                     }
                 } else {
                     if (g_app.screenSaverActive) {
-                        LogMessage("Timer: Deactivating screen saver");
+                        LogMessage("Timer: Deactivating screen saver (idle: %lums, audio: %d)", idleTime, audioPlaying);
                         HideScreenSaver();
                         UpdateTrayIcon(0);
                     }
@@ -568,6 +579,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
 
         case WM_TRAYICON:
             if (lParam == WM_RBUTTONUP) {
+                LogMessage("User: Right-clicked tray icon - opening context menu");
                 POINT pt;
                 GetCursorPos(&pt);
                 SetForegroundWindow(hWnd);
@@ -581,12 +593,15 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
                 DestroyMenu(hMenu);
             } else if (lParam == WM_LBUTTONDOWN) {
                 if (g_hSettingsDialog) {
+                    LogMessage("User: Left-clicked tray icon - settings dialog already open, bringing to foreground");
                     SetForegroundWindow(g_hSettingsDialog);
                 } else {
                     if (g_app.screenSaverActive) {
+                        LogMessage("User: Left-clicked tray icon - deactivating screen saver");
                         HideScreenSaver();
                         UpdateTrayIcon(0);
                     } else {
+                        LogMessage("User: Left-clicked tray icon - activating screen saver");
                         ShowScreenSaver();
                         UpdateTrayIcon(1);
                     }
@@ -597,9 +612,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
         case WM_COMMAND:
             switch (LOWORD(wParam)) {
                 case 1:
+                    LogMessage("User: Selected 'Settings' from tray menu");
                     ShowSettingsDialog();
                     break;
                 case 2:
+                    LogMessage("User: Selected 'Exit' from tray menu - shutting down");
                     HideScreenSaver();
                     Shell_NotifyIcon(NIM_DELETE, &g_app.nid);
                     PostQuitMessage(0);
