@@ -23,12 +23,14 @@ static const GUID IID_IAudioMeterInformation_impl = {0xC02216F6, 0x8C63, 0x4B94,
 #define DEFAULT_IDLE_TIMEOUT 300
 #define DEFAULT_AUDIO_THRESHOLD 0.001f
 #define MAX_LOG_FILES 10
+#define MANUAL_ACTIVATION_COOLDOWN_MS 2500
 
 static char g_logFilePath[MAX_PATH];
 static FILE* g_logFile = NULL;
 
 void ApplySettings(HWND hWnd);
 LRESULT CALLBACK SettingsDialogProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
+void ShowScreenSaver(int isManual);
 
 typedef struct {
     HMONITOR hMonitor;
@@ -64,6 +66,8 @@ typedef struct {
     IAudioMeterInformation *pAudioMeter;
     int isShuttingDown;
     int cursorHidden;
+    DWORD manualActivationTime;
+    int isManualActivation;
 } AppState;
 
 static AppState g_app;
@@ -292,8 +296,17 @@ int IsAudioPlaying() {
     return result;
 }
 
-void ShowScreenSaver() {
+void ShowScreenSaver(int isManual) {
     if (g_app.screenSaverActive) return;
+
+    g_app.isManualActivation = isManual;
+    if (isManual) {
+        g_app.manualActivationTime = GetTickCount();
+        LogMessage("Showing screen saver (manual activation)");
+    } else {
+        g_app.manualActivationTime = 0;
+        LogMessage("Showing screen saver (automatic activation)");
+    }
 
     LogMessage("Showing screen saver on %d monitors", g_monitorCount);
 
@@ -326,6 +339,7 @@ void HideScreenSaver() {
     }
     g_app.monitorWindowCount = 0;
     g_app.screenSaverActive = 0;
+    g_app.manualActivationTime = 0;
 
     if (g_app.cursorHidden) {
         ShowCursor(TRUE);
@@ -577,14 +591,28 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
                 if (!audioPlaying && idleTime > (DWORD)(g_app.config.idleTimeout * 1000)) {
                     if (!g_app.screenSaverActive) {
                         LogMessage("Timer: Activating screen saver (idle: %lums)", idleTime);
-                        ShowScreenSaver();
+                        ShowScreenSaver(0);
                         UpdateTrayIcon(1);
                     }
                 } else {
                     if (g_app.screenSaverActive) {
-                        LogMessage("Timer: Deactivating screen saver (idle: %lums, audio: %d)", idleTime, audioPlaying);
-                        HideScreenSaver();
-                        UpdateTrayIcon(0);
+                        if (g_app.isManualActivation) {
+                            DWORD timeSinceActivation = GetTickCount() - g_app.manualActivationTime;
+                            if (timeSinceActivation < MANUAL_ACTIVATION_COOLDOWN_MS) {
+                                LogMessage("Timer: Skipping deactivation (manual cooldown: %lums/%dms)",
+                                         timeSinceActivation, MANUAL_ACTIVATION_COOLDOWN_MS);
+                            } else {
+                                if (idleTime < 2000) {
+                                    LogMessage("Timer: Deactivating screen saver (new input detected after cooldown)");
+                                    HideScreenSaver();
+                                    UpdateTrayIcon(0);
+                                }
+                            }
+                        } else {
+                            LogMessage("Timer: Deactivating screen saver (idle: %lums, audio: %d)", idleTime, audioPlaying);
+                            HideScreenSaver();
+                            UpdateTrayIcon(0);
+                        }
                     }
                 }
             }
@@ -614,8 +642,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
                         HideScreenSaver();
                         UpdateTrayIcon(0);
                     } else {
-                        LogMessage("User: Left-clicked tray icon - activating screen saver");
-                        ShowScreenSaver();
+                        LogMessage("User: Left-clicked tray icon - activating screen saver (manual)");
+                        ShowScreenSaver(1);
                         UpdateTrayIcon(1);
                     }
                 }
