@@ -123,11 +123,19 @@ BOOL CALLBACK EnumMonitorCallback(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprc
         g_monitors[g_monitorCount].rect = *lprcMonitor;
         g_monitors[g_monitorCount].monitorIndex = g_monitorCount;
         g_monitors[g_monitorCount].isPrimary = (mi.dwFlags & MONITORINFOF_PRIMARY) != 0;
-        g_monitors[g_monitorCount].width = lprcMonitor->right - lprcMonitor->left;
-        g_monitors[g_monitorCount].height = lprcMonitor->bottom - lprcMonitor->top;
         
         WideCharToMultiByte(CP_ACP, 0, mi.szDevice, -1,
                            g_monitors[g_monitorCount].deviceName, 32, NULL, NULL);
+        
+        DEVMODEA dm = {0};
+        dm.dmSize = sizeof(DEVMODEA);
+        if (EnumDisplaySettingsA(mi.szDevice, ENUM_CURRENT_SETTINGS, &dm)) {
+            g_monitors[g_monitorCount].width = dm.dmPelsWidth;
+            g_monitors[g_monitorCount].height = dm.dmPelsHeight;
+        } else {
+            g_monitors[g_monitorCount].width = lprcMonitor->right - lprcMonitor->left;
+            g_monitors[g_monitorCount].height = lprcMonitor->bottom - lprcMonitor->top;
+        }
         
         snprintf(g_monitors[g_monitorCount].displayName, 64,
                 "Display %d (%dx%d)%s",
