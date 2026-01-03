@@ -162,7 +162,7 @@ BOOL CALLBACK CreateMonitorWindowsCallback(HMONITOR hMonitor, HDC hdcMonitor, LP
     if (g_currentMonitorIndex >= 16) return TRUE;
 
     if (app->config.monitorsEnabled[g_currentMonitorIndex]) {
-        HWND hWnd = CreateWindowExW(WS_EX_TOPMOST,
+        HWND hWnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
                                    L"OLEDAegisScreen", L"",
                                    WS_POPUP,
                                    lprcMonitor->left, lprcMonitor->top,
