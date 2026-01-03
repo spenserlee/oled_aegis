@@ -63,6 +63,7 @@ typedef struct {
     IMMDevice *pAudioDevice;
     IAudioMeterInformation *pAudioMeter;
     int isShuttingDown;
+    int cursorHidden;
 } AppState;
 
 static AppState g_app;
@@ -304,6 +305,12 @@ void ShowScreenSaver() {
     LogMessage("Created %d screen saver windows", g_app.monitorWindowCount);
 
     g_app.screenSaverActive = 1;
+
+    if (!g_app.cursorHidden) {
+        ShowCursor(FALSE);
+        g_app.cursorHidden = 1;
+        LogMessage("Cursor hidden");
+    }
 }
 
 void HideScreenSaver() {
@@ -319,6 +326,12 @@ void HideScreenSaver() {
     }
     g_app.monitorWindowCount = 0;
     g_app.screenSaverActive = 0;
+
+    if (g_app.cursorHidden) {
+        ShowCursor(TRUE);
+        g_app.cursorHidden = 0;
+        LogMessage("Cursor restored");
+    }
 }
 
 void OpenConfigFileLocation() {
@@ -626,6 +639,12 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
 
         case WM_DESTROY:
             LogMessage("Application shutting down");
+
+            if (g_app.cursorHidden) {
+                ShowCursor(TRUE);
+                g_app.cursorHidden = 0;
+                LogMessage("Cursor restored on shutdown");
+            }
 
             HideScreenSaver();
             Shell_NotifyIcon(NIM_DELETE, &g_app.nid);
