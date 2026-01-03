@@ -30,6 +30,7 @@ static FILE* g_logFile = NULL;
 
 void ApplySettings(HWND hWnd);
 LRESULT CALLBACK SettingsDialogProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
+LRESULT CALLBACK TimeoutEditSubclassProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
 void ShowScreenSaver(int isManual);
 
 typedef struct {
@@ -77,6 +78,8 @@ static HBRUSH g_blackBrush = NULL;
 static MonitorInfo g_monitors[16];
 static int g_monitorCount = 0;
 static HWND g_hSettingsDialog = NULL;
+static HFONT g_hSettingsFont = NULL;
+static WNDPROC g_originalTimeoutEditProc = NULL;
 
 void LogMessage(const char* format, ...) {
     if (!g_app.config.debugMode) return;
@@ -392,8 +395,38 @@ LRESULT CALLBACK SettingsDialogProc(HWND hWnd, UINT message, WPARAM wParam, LPAR
             DestroyWindow(hWnd);
             g_hSettingsDialog = NULL;
             return 0;
+        case WM_DESTROY:
+            if (g_hSettingsFont) {
+                DeleteObject(g_hSettingsFont);
+                g_hSettingsFont = NULL;
+            }
+            g_originalTimeoutEditProc = NULL;
+            return 0;
     }
     return DefWindowProc(hWnd, message, wParam, lParam);
+}
+
+LRESULT CALLBACK TimeoutEditSubclassProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    if (message == WM_MOUSEWHEEL) {
+        short zDelta = GET_WHEEL_DELTA_WPARAM(wParam);
+        char buffer[32];
+        GetWindowTextA(hWnd, buffer, 32);
+        int value = atoi(buffer);
+
+        if (zDelta > 0) {
+            value += 10;
+        } else {
+            value -= 10;
+        }
+
+        if (value < 10) value = 10;
+        if (value > 3600) value = 3600;
+
+        sprintf_s(buffer, 32, "%d", value);
+        SetWindowTextA(hWnd, buffer);
+        return 0;
+    }
+    return CallWindowProcA(g_originalTimeoutEditProc, hWnd, message, wParam, lParam);
 }
 
 void ShowSettingsDialog() {
@@ -401,6 +434,11 @@ void ShowSettingsDialog() {
         SetForegroundWindow(g_hSettingsDialog);
         return;
     }
+
+    NONCLIENTMETRICS ncm = {0};
+    ncm.cbSize = sizeof(NONCLIENTMETRICS);
+    SystemParametersInfoA(SPI_GETNONCLIENTMETRICS, sizeof(NONCLIENTMETRICS), &ncm, 0);
+    g_hSettingsFont = CreateFontIndirectA(&ncm.lfMessageFont);
 
     WNDCLASSA wc = {0};
     wc.lpfnWndProc = DefWindowProc;
@@ -412,63 +450,79 @@ void ShowSettingsDialog() {
 
     HMODULE hMod = GetModuleHandle(NULL);
     g_hSettingsDialog = CreateWindowExA(0, "OLED Aegis Settings Dialog", "OLED Aegis Settings",
-                                      WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN,
-                                      CW_USEDEFAULT, CW_USEDEFAULT, 400, 300,
+                                      // WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN,
+                                      WS_POPUP | WS_CAPTION | WS_SYSMENU,
+                                      CW_USEDEFAULT, CW_USEDEFAULT, 410, 400,
                                       NULL, NULL, hMod, NULL);
 
     if (g_hSettingsDialog) {
         SetWindowLongPtr(g_hSettingsDialog, GWLP_WNDPROC, (LONG_PTR)SettingsDialogProc);
 
-        CreateWindowA("STATIC", "Idle Timeout (seconds):",
+        HWND hTimeoutLabel = CreateWindowA("STATIC", "Idle Timeout (seconds):",
                      WS_CHILD | WS_VISIBLE,
                      20, 20, 180, 20, g_hSettingsDialog, NULL, hMod, NULL);
-        CreateWindowA("EDIT", "",
+        HWND hTimeoutEdit = CreateWindowA("EDIT", "",
                      WS_CHILD | WS_VISIBLE | WS_BORDER | ES_NUMBER,
                      200, 20, 100, 20, g_hSettingsDialog, (HMENU)1001, hMod, NULL);
 
-        CreateWindowA("BUTTON", "Enable Audio Detection",
+        HWND hAudioCheck = CreateWindowA("BUTTON", "Enable Audio Detection",
                      WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                     20, 50, 200, 20, g_hSettingsDialog, (HMENU)1002, hMod, NULL);
-        CreateWindowA("BUTTON", "Debug Mode (Ignore Audio)",
+                     20, 50, 220, 20, g_hSettingsDialog, (HMENU)1002, hMod, NULL);
+        HWND hDebugCheck = CreateWindowA("BUTTON", "Debug Mode (Ignore Audio)",
                      WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                     20, 75, 200, 20, g_hSettingsDialog, (HMENU)1003, hMod, NULL);
-        CreateWindowA("BUTTON", "Run at Startup",
+                     20, 75, 220, 20, g_hSettingsDialog, (HMENU)1003, hMod, NULL);
+        HWND hStartupCheck = CreateWindowA("BUTTON", "Run at Startup",
                      WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                     20, 100, 200, 20, g_hSettingsDialog, (HMENU)1004, hMod, NULL);
+                     20, 100, 220, 20, g_hSettingsDialog, (HMENU)1004, hMod, NULL);
 
-        CreateWindowA("STATIC", "Monitors:",
+        HWND hMonitorsLabel = CreateWindowA("STATIC", "Monitors:",
                      WS_CHILD | WS_VISIBLE,
                      20, 130, 100, 20, g_hSettingsDialog, NULL, hMod, NULL);
 
         int y = 155;
         for (int i = 0; i < g_monitorCount; i++) {
-            CreateWindowA("BUTTON", g_monitors[i].displayName,
+            HWND hMonitorCheck = CreateWindowA("BUTTON", g_monitors[i].displayName,
                          WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                         20, y, 350, 20, g_hSettingsDialog, (HMENU)(2000 + i),
+                         20, y, 380, 20, g_hSettingsDialog, (HMENU)(2000 + i),
                          hMod, NULL);
+            if (g_hSettingsFont) SendMessageA(hMonitorCheck, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
             y += 25;
         }
 
-        int btnY = y + 10;
-        CreateWindowA("BUTTON", "Apply",
+        int btnY = y + 25;
+        HWND hApplyBtn = CreateWindowA("BUTTON", "Apply",
                      WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
                      20, btnY, 100, 30, g_hSettingsDialog, (HMENU)1005, hMod, NULL);
-        CreateWindowA("BUTTON", "Open Config File",
+        HWND hConfigBtn = CreateWindowA("BUTTON", "Open Config File",
                      WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                     130, btnY, 100, 30, g_hSettingsDialog, (HMENU)1006, hMod, NULL);
-        CreateWindowA("BUTTON", "Close",
+                     130, btnY, 130, 30, g_hSettingsDialog, (HMENU)1006, hMod, NULL);
+        HWND hCloseBtn = CreateWindowA("BUTTON", "Close",
                      WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                     240, btnY, 100, 30, g_hSettingsDialog, (HMENU)1007, hMod, NULL);
+                     270, btnY, 100, 30, g_hSettingsDialog, (HMENU)1007, hMod, NULL);
 
-        SetWindowPos(g_hSettingsDialog, NULL, 0, 0, 400, btnY + 70,
-                    SWP_NOMOVE | SWP_NOZORDER);
+        int dialogWidth = 410;
+        int dialogHeight = btnY + 90;
+        SetWindowPos(g_hSettingsDialog, NULL, 0, 0, dialogWidth, dialogHeight,
+                     SWP_NOMOVE | SWP_NOZORDER);
 
         int screenWidth = GetSystemMetrics(SM_CXSCREEN);
         int screenHeight = GetSystemMetrics(SM_CYSCREEN);
-        int width = 400;
-        int height = btnY + 70;
-        SetWindowPos(g_hSettingsDialog, NULL, (screenWidth - width) / 2, (screenHeight - height) / 2,
-                    0, 0, SWP_NOSIZE | SWP_NOZORDER);
+        SetWindowPos(g_hSettingsDialog, NULL, (screenWidth - dialogWidth) / 2, (screenHeight - dialogHeight) / 2,
+                     0, 0, SWP_NOSIZE | SWP_NOZORDER);
+
+        if (g_hSettingsFont) {
+            SendMessageA(hTimeoutLabel, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
+            SendMessageA(hTimeoutEdit, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
+            SendMessageA(hAudioCheck, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
+            SendMessageA(hDebugCheck, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
+            SendMessageA(hStartupCheck, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
+            SendMessageA(hMonitorsLabel, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
+            SendMessageA(hApplyBtn, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
+            SendMessageA(hConfigBtn, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
+            SendMessageA(hCloseBtn, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
+        }
+
+        g_originalTimeoutEditProc = (WNDPROC)SetWindowLongPtrA(hTimeoutEdit, GWLP_WNDPROC, (LONG_PTR)TimeoutEditSubclassProc);
 
         char buffer[32];
         sprintf_s(buffer, 32, "%d", g_app.config.idleTimeout);
@@ -724,6 +778,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
 }
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
+    SetProcessDPIAware();
+
     WNDCLASSW wc = {0};
     wc.lpfnWndProc = WndProc;
     wc.hInstance = hInstance;
