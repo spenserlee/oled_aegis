@@ -22,6 +22,9 @@ static const GUID IID_IAudioMeterInformation_impl = {0xC02216F6, 0x8C63, 0x4B94,
 #define DEFAULT_IDLE_TIMEOUT 300
 #define DEFAULT_AUDIO_THRESHOLD 0.001f
 
+void ApplySettings(HWND hWnd);
+LRESULT CALLBACK SettingsDialogProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
+
 typedef struct {
     HMONITOR hMonitor;
     RECT rect;
@@ -39,6 +42,7 @@ typedef struct {
     int monitorsEnabled[16];
     int monitorCount;
     int startupEnabled;
+    int debugMode;
 } Config;
 
 typedef struct {
@@ -61,6 +65,7 @@ static int g_currentMonitorIndex = 0;
 static HBRUSH g_blackBrush = NULL;
 static MonitorInfo g_monitors[16];
 static int g_monitorCount = 0;
+static HWND g_hSettingsDialog = NULL;
 
 BOOL CALLBACK EnumMonitorCallback(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData) {
     MONITORINFOEX mi;
@@ -134,13 +139,26 @@ BOOL CALLBACK CreateMonitorWindowsCallback(HMONITOR hMonitor, HDC hdcMonitor, LP
     return TRUE;
 }
 
+int ConfigFileExists() {
+    char configPath[MAX_PATH];
+    SHGetFolderPathA(NULL, CSIDL_APPDATA, NULL, 0, configPath);
+    strcat_s(configPath, sizeof(configPath), "\\oled_aegis.ini");
+
+    FILE* f = fopen(configPath, "r");
+    if (f) {
+        fclose(f);
+        return 1;
+    }
+    return 0;
+}
+
 void LoadConfig() {
     char configPath[MAX_PATH];
     SHGetFolderPathA(NULL, CSIDL_APPDATA, NULL, 0, configPath);
     strcat_s(configPath, sizeof(configPath), "\\oled_aegis.ini");
 
     g_app.config.monitorCount = g_monitorCount;
-    
+
     FILE* f = fopen(configPath, "r");
     if (f) {
         char line[256];
@@ -153,6 +171,8 @@ void LoadConfig() {
                     g_app.config.audioDetectionEnabled = atoi(value);
                 } else if (strcmp(key, "startupEnabled") == 0) {
                     g_app.config.startupEnabled = atoi(value);
+                } else if (strcmp(key, "debugMode") == 0) {
+                    g_app.config.debugMode = atoi(value);
                 } else if (strncmp(key, "monitor", 7) == 0) {
                     int idx = atoi(key + 7);
                     if (idx >= 0 && idx < 16) {
@@ -175,6 +195,7 @@ void SaveConfig() {
         fprintf(f, "idleTimeout=%d\n", g_app.config.idleTimeout);
         fprintf(f, "audioDetectionEnabled=%d\n", g_app.config.audioDetectionEnabled);
         fprintf(f, "startupEnabled=%d\n", g_app.config.startupEnabled);
+        fprintf(f, "debugMode=%d\n", g_app.config.debugMode);
         for (int i = 0; i < g_monitorCount; i++) {
             fprintf(f, "monitor%d=%d\n", i, g_app.config.monitorsEnabled[i]);
         }
@@ -252,21 +273,151 @@ void HideScreenSaver() {
     g_app.screenSaverActive = 0;
 }
 
-void ShowSettingsDialog() {
+void OpenConfigFileLocation() {
     char configPath[MAX_PATH];
     SHGetFolderPathA(NULL, CSIDL_APPDATA, NULL, 0, configPath);
     strcat_s(configPath, sizeof(configPath), "\\oled_aegis.ini");
 
-    MessageBoxA(NULL,
-                "Configuration file location:\n\n"
-                "Edit oled_aegis.ini in your AppData folder to change:\n"
-                "- idleTimeout: seconds of inactivity before activation\n"
-                "- audioDetectionEnabled: 1 to check for audio, 0 to ignore\n"
-                "- monitorN: 1 to enable screen saver on monitor N, 0 to disable\n"
-                "- startupEnabled: 1 to run at startup, 0 to disable\n\n"
-                "Changes will be loaded automatically.",
-                "OLED Aegis Settings",
-                MB_OK | MB_ICONINFORMATION);
+    char selectCmd[MAX_PATH + 20];
+    sprintf_s(selectCmd, sizeof(selectCmd), "/select,\"%s\"", configPath);
+    ShellExecuteA(NULL, "open", "explorer.exe", selectCmd, NULL, SW_SHOW);
+}
+
+LRESULT CALLBACK SettingsDialogProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    switch (message) {
+        case WM_COMMAND:
+        {
+            int wmId = LOWORD(wParam);
+            switch (wmId) {
+                case 1005:
+                    ApplySettings(hWnd);
+                    break;
+                case 1006:
+                    OpenConfigFileLocation();
+                    break;
+                case 1007:
+                    DestroyWindow(hWnd);
+                    g_hSettingsDialog = NULL;
+                    break;
+            }
+            return 0;
+        }
+        case WM_CLOSE:
+            DestroyWindow(hWnd);
+            g_hSettingsDialog = NULL;
+            return 0;
+    }
+    return DefWindowProc(hWnd, message, wParam, lParam);
+}
+
+void ShowSettingsDialog() {
+    if (g_hSettingsDialog) {
+        SetForegroundWindow(g_hSettingsDialog);
+        return;
+    }
+
+    WNDCLASSA wc = {0};
+    wc.lpfnWndProc = DefWindowProc;
+    wc.hInstance = GetModuleHandle(NULL);
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+    wc.lpszClassName = "OLED Aegis Settings Dialog";
+    RegisterClassA(&wc);
+
+    HMODULE hMod = GetModuleHandle(NULL);
+    g_hSettingsDialog = CreateWindowExA(0, "OLED Aegis Settings Dialog", "OLED Aegis Settings",
+                                      WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN,
+                                      CW_USEDEFAULT, CW_USEDEFAULT, 400, 300,
+                                      NULL, NULL, hMod, NULL);
+
+    if (g_hSettingsDialog) {
+        SetWindowLongPtr(g_hSettingsDialog, GWLP_WNDPROC, (LONG_PTR)SettingsDialogProc);
+
+        CreateWindowA("STATIC", "Idle Timeout (seconds):",
+                     WS_CHILD | WS_VISIBLE,
+                     20, 20, 180, 20, g_hSettingsDialog, NULL, hMod, NULL);
+        CreateWindowA("EDIT", "",
+                     WS_CHILD | WS_VISIBLE | WS_BORDER | ES_NUMBER,
+                     200, 20, 100, 20, g_hSettingsDialog, (HMENU)1001, hMod, NULL);
+
+        CreateWindowA("BUTTON", "Enable Audio Detection",
+                     WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                     20, 50, 200, 20, g_hSettingsDialog, (HMENU)1002, hMod, NULL);
+        CreateWindowA("BUTTON", "Debug Mode (Ignore Audio)",
+                     WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                     20, 75, 200, 20, g_hSettingsDialog, (HMENU)1003, hMod, NULL);
+        CreateWindowA("BUTTON", "Run at Startup",
+                     WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                     20, 100, 200, 20, g_hSettingsDialog, (HMENU)1004, hMod, NULL);
+
+        CreateWindowA("STATIC", "Monitors:",
+                     WS_CHILD | WS_VISIBLE,
+                     20, 130, 100, 20, g_hSettingsDialog, NULL, hMod, NULL);
+
+        int y = 155;
+        for (int i = 0; i < g_monitorCount; i++) {
+            CreateWindowA("BUTTON", g_monitors[i].displayName,
+                         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                         20, y, 350, 20, g_hSettingsDialog, (HMENU)(2000 + i),
+                         hMod, NULL);
+            y += 25;
+        }
+
+        int btnY = y + 10;
+        CreateWindowA("BUTTON", "Apply",
+                     WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                     20, btnY, 100, 30, g_hSettingsDialog, (HMENU)1005, hMod, NULL);
+        CreateWindowA("BUTTON", "Open Config File",
+                     WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                     130, btnY, 100, 30, g_hSettingsDialog, (HMENU)1006, hMod, NULL);
+        CreateWindowA("BUTTON", "Close",
+                     WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                     240, btnY, 100, 30, g_hSettingsDialog, (HMENU)1007, hMod, NULL);
+
+        SetWindowPos(g_hSettingsDialog, NULL, 0, 0, 400, btnY + 50,
+                    SWP_NOMOVE | SWP_NOZORDER);
+
+        int screenWidth = GetSystemMetrics(SM_CXSCREEN);
+        int screenHeight = GetSystemMetrics(SM_CYSCREEN);
+        RECT rect;
+        GetWindowRect(g_hSettingsDialog, &rect);
+        int width = rect.right - rect.left;
+        int height = rect.bottom - rect.top;
+        SetWindowPos(g_hSettingsDialog, NULL, (screenWidth - width) / 2, (screenHeight - height) / 2,
+                    0, 0, SWP_NOSIZE | SWP_NOZORDER);
+
+        char buffer[32];
+        sprintf_s(buffer, 32, "%d", g_app.config.idleTimeout);
+        SetDlgItemTextA(g_hSettingsDialog, 1001, buffer);
+
+        CheckDlgButton(g_hSettingsDialog, 1002, g_app.config.audioDetectionEnabled ? BST_CHECKED : BST_UNCHECKED);
+        CheckDlgButton(g_hSettingsDialog, 1003, g_app.config.debugMode ? BST_CHECKED : BST_UNCHECKED);
+        CheckDlgButton(g_hSettingsDialog, 1004, g_app.config.startupEnabled ? BST_CHECKED : BST_UNCHECKED);
+
+        for (int i = 0; i < g_monitorCount; i++) {
+            CheckDlgButton(g_hSettingsDialog, 2000 + i, g_app.config.monitorsEnabled[i] ? BST_CHECKED : BST_UNCHECKED);
+        }
+
+        ShowWindow(g_hSettingsDialog, SW_SHOW);
+        UpdateWindow(g_hSettingsDialog);
+    }
+}
+
+void ApplySettings(HWND hWnd) {
+    char buffer[32];
+    GetDlgItemTextA(hWnd, 1001, buffer, 32);
+    g_app.config.idleTimeout = atoi(buffer);
+
+    g_app.config.audioDetectionEnabled = IsDlgButtonChecked(hWnd, 1002) == BST_CHECKED;
+    g_app.config.debugMode = IsDlgButtonChecked(hWnd, 1003) == BST_CHECKED;
+    g_app.config.startupEnabled = IsDlgButtonChecked(hWnd, 1004) == BST_CHECKED;
+
+    for (int i = 0; i < g_monitorCount; i++) {
+        g_app.config.monitorsEnabled[i] = IsDlgButtonChecked(hWnd, 2000 + i) == BST_CHECKED;
+    }
+
+    SaveConfig();
+    UpdateStartupRegistry();
 }
 
 void UpdateTrayIcon(int active) {
@@ -294,11 +445,17 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
             g_app.config.idleTimeout = DEFAULT_IDLE_TIMEOUT;
             g_app.config.audioDetectionEnabled = 1;
             g_app.config.startupEnabled = 0;
+            g_app.config.debugMode = 0;
             for (int i = 0; i < 16; i++) {
                 g_app.config.monitorsEnabled[i] = 1;
             }
 
             EnumerateMonitors();
+
+            if (!ConfigFileExists()) {
+                SaveConfig();
+            }
+
             LoadConfig();
             UpdateStartupRegistry();
 
@@ -353,13 +510,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
                 HMENU hMenu = CreatePopupMenu();
                 AppendMenuA(hMenu, MF_STRING, 1, "Settings...");
                 AppendMenuA(hMenu, MF_SEPARATOR, 0, NULL);
-                AppendMenuA(hMenu, MF_STRING, 2, "Enable Startup");
-                AppendMenuA(hMenu, MF_STRING, 3, "Disable Startup");
-                AppendMenuA(hMenu, MF_SEPARATOR, 0, NULL);
-                AppendMenuA(hMenu, MF_STRING, 4, "Exit");
-
-                CheckMenuItem(hMenu, 2, g_app.config.startupEnabled ? MF_CHECKED : MF_UNCHECKED);
-                CheckMenuItem(hMenu, 3, g_app.config.startupEnabled ? MF_UNCHECKED : MF_CHECKED);
+                AppendMenuA(hMenu, MF_STRING, 2, "Exit");
 
                 TrackPopupMenu(hMenu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hWnd, NULL);
                 DestroyMenu(hMenu);
@@ -380,16 +531,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
                     ShowSettingsDialog();
                     break;
                 case 2:
-                    g_app.config.startupEnabled = 1;
-                    UpdateStartupRegistry();
-                    SaveConfig();
-                    break;
-                case 3:
-                    g_app.config.startupEnabled = 0;
-                    UpdateStartupRegistry();
-                    SaveConfig();
-                    break;
-                case 4:
                     HideScreenSaver();
                     Shell_NotifyIcon(NIM_DELETE, &g_app.nid);
                     PostQuitMessage(0);
@@ -400,6 +541,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
         case WM_DESTROY:
             HideScreenSaver();
             Shell_NotifyIcon(NIM_DELETE, &g_app.nid);
+
+            if (g_hSettingsDialog) {
+                DestroyWindow(g_hSettingsDialog);
+                g_hSettingsDialog = NULL;
+            }
 
             if (g_app.pAudioMeter) {
                 g_app.pAudioMeter->lpVtbl->Release(g_app.pAudioMeter);
