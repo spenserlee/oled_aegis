@@ -1,0 +1,25 @@
+# OLED Aegis Configuration File
+# This file is automatically created and can be edited to customize behavior
+
+# Number of seconds of inactivity before screen saver activates
+# Default: 300 (5 minutes)
+idleTimeout=300
+
+# Set to 1 to detect audio playback and prevent activation when audio is playing
+# Set to 0 to ignore audio detection
+# Default: 1
+audioDetectionEnabled=1
+
+# Set to 1 to automatically start OLED Aegis when Windows starts
+# Set to 0 to disable automatic startup
+# Default: 0
+startupEnabled=0
+
+# Monitor settings
+# Set monitorN to 1 to enable screen saver on monitor N (0-indexed)
+# Set monitorN to 0 to disable screen saver on that monitor
+# Monitors are numbered from left to right starting at 0
+monitor0=1
+monitor1=1
+monitor2=1
+monitor3=1
