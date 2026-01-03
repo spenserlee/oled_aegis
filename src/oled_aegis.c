@@ -45,11 +45,15 @@ typedef struct {
     int screenSaverActive;
     time_t lastInputTime;
     int isAudioPlaying;
+    IMMDeviceEnumerator *pAudioEnumerator;
+    IMMDevice *pAudioDevice;
+    IAudioMeterInformation *pAudioMeter;
 } AppState;
 
 static AppState g_app;
 
 static int g_currentMonitorIndex = 0;
+static HBRUSH g_blackBrush = NULL;
 
 BOOL CALLBACK EnumMonitorCallback(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData) {
     MONITORINFOEX mi;
@@ -64,30 +68,41 @@ BOOL CALLBACK EnumMonitorCallback(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprc
     return TRUE;
 }
 
+LRESULT CALLBACK MonitorWindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    switch (message) {
+        case WM_PAINT:
+        {
+            PAINTSTRUCT ps;
+            HDC hdc = BeginPaint(hWnd, &ps);
+            RECT rect;
+            GetClientRect(hWnd, &rect);
+            FillRect(hdc, &rect, g_blackBrush);
+            EndPaint(hWnd, &ps);
+            break;
+        }
+        default:
+            return DefWindowProc(hWnd, message, wParam, lParam);
+    }
+    return 0;
+}
+
 BOOL CALLBACK CreateMonitorWindowsCallback(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData) {
     AppState* app = (AppState*)dwData;
 
     if (g_currentMonitorIndex >= 16) return TRUE;
 
     if (app->config.monitorsEnabled[g_currentMonitorIndex]) {
-        WNDCLASS wc = {0};
-        wc.style = CS_HREDRAW | CS_VREDRAW;
-        wc.lpfnWndProc = DefWindowProc;
-        wc.hInstance = GetModuleHandle(NULL);
-        wc.hbrBackground = CreateSolidBrush(RGB(0, 0, 0));
-        wc.lpszClassName = L"OLEDAegisScreen";
-
-        RegisterClass(&wc);
-
-        HWND hWnd = CreateWindowEx(WS_EX_TOPMOST | WS_EX_NOACTIVATE,
+        HWND hWnd = CreateWindowEx(WS_EX_TOPMOST,
                                   L"OLEDAegisScreen", L"",
-                                  WS_POPUP | WS_VISIBLE,
+                                  WS_POPUP,
                                   lprcMonitor->left, lprcMonitor->top,
                                   lprcMonitor->right - lprcMonitor->left,
                                   lprcMonitor->bottom - lprcMonitor->top,
                                   NULL, NULL, GetModuleHandle(NULL), NULL);
 
         if (hWnd) {
+            ShowWindow(hWnd, SW_SHOW);
+            UpdateWindow(hWnd);
             app->monitorWindows[app->monitorWindowCount++] = hWnd;
         }
     }
@@ -169,33 +184,17 @@ int IsAudioPlaying() {
         return 0;
     }
 
-    IMMDeviceEnumerator *pEnumerator = NULL;
-    IMMDevice *pDevice = NULL;
-    IAudioMeterInformation *pMeter = NULL;
-    float peakValue = 0.0f;
-    int result = 0;
-
-    HRESULT hr = CoInitialize(NULL);
-    if (FAILED(hr)) return 0;
-
-    hr = CoCreateInstance(&CLSID_MMDeviceEnumerator, NULL, CLSCTX_ALL, IID_IMMDeviceEnumerator, (void**)&pEnumerator);
-    if (SUCCEEDED(hr)) {
-        hr = pEnumerator->lpVtbl->GetDefaultAudioEndpoint(pEnumerator, eRender, eConsole, &pDevice);
-        if (SUCCEEDED(hr)) {
-            hr = pDevice->lpVtbl->Activate(pDevice, IID_IAudioMeterInformation, CLSCTX_ALL, NULL, (void**)&pMeter);
-            if (SUCCEEDED(hr)) {
-                hr = pMeter->lpVtbl->GetPeakValue(pMeter, &peakValue);
-                if (SUCCEEDED(hr)) {
-                    result = (peakValue > DEFAULT_AUDIO_THRESHOLD);
-                }
-                pMeter->lpVtbl->Release(pMeter);
-            }
-            pDevice->lpVtbl->Release(pDevice);
-        }
-        pEnumerator->lpVtbl->Release(pEnumerator);
+    if (!g_app.pAudioMeter) {
+        return 0;
     }
 
-    CoUninitialize();
+    float peakValue = 0.0f;
+    int result = 0;
+    HRESULT hr = g_app.pAudioMeter->lpVtbl->GetPeakValue(g_app.pAudioMeter, &peakValue);
+    if (SUCCEEDED(hr)) {
+        result = (peakValue > DEFAULT_AUDIO_THRESHOLD);
+    }
+
     return result;
 }
 
@@ -272,6 +271,25 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
             LoadConfig();
             UpdateStartupRegistry();
 
+            g_blackBrush = CreateSolidBrush(RGB(0, 0, 0));
+
+            WNDCLASS wc = {0};
+            wc.style = CS_HREDRAW | CS_VREDRAW;
+            wc.lpfnWndProc = MonitorWindowProc;
+            wc.hInstance = GetModuleHandle(NULL);
+            wc.hbrBackground = g_blackBrush;
+            wc.lpszClassName = L"OLEDAegisScreen";
+            RegisterClass(&wc);
+
+            CoInitialize(NULL);
+            HRESULT hr = CoCreateInstance(&CLSID_MMDeviceEnumerator, NULL, CLSCTX_ALL, IID_IMMDeviceEnumerator, (void**)&g_app.pAudioEnumerator);
+            if (SUCCEEDED(hr) && g_app.pAudioEnumerator) {
+                hr = g_app.pAudioEnumerator->lpVtbl->GetDefaultAudioEndpoint(g_app.pAudioEnumerator, eRender, eConsole, &g_app.pAudioDevice);
+                if (SUCCEEDED(hr) && g_app.pAudioDevice) {
+                    hr = g_app.pAudioDevice->lpVtbl->Activate(g_app.pAudioDevice, IID_IAudioMeterInformation, CLSCTX_ALL, NULL, (void**)&g_app.pAudioMeter);
+                }
+            }
+
             SetTimer(hWnd, TIMER_IDLE_CHECK, 1000, NULL);
 
             break;
@@ -315,7 +333,13 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
                 TrackPopupMenu(hMenu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hWnd, NULL);
                 DestroyMenu(hMenu);
             } else if (lParam == WM_LBUTTONDOWN) {
-                g_app.screenSaverActive = !g_app.screenSaverActive;
+                if (g_app.screenSaverActive) {
+                    HideScreenSaver();
+                    UpdateTrayIcon(0);
+                } else {
+                    ShowScreenSaver();
+                    UpdateTrayIcon(1);
+                }
             }
             break;
 
@@ -345,6 +369,26 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
         case WM_DESTROY:
             HideScreenSaver();
             Shell_NotifyIcon(NIM_DELETE, &g_app.nid);
+
+            if (g_app.pAudioMeter) {
+                g_app.pAudioMeter->lpVtbl->Release(g_app.pAudioMeter);
+                g_app.pAudioMeter = NULL;
+            }
+            if (g_app.pAudioDevice) {
+                g_app.pAudioDevice->lpVtbl->Release(g_app.pAudioDevice);
+                g_app.pAudioDevice = NULL;
+            }
+            if (g_app.pAudioEnumerator) {
+                g_app.pAudioEnumerator->lpVtbl->Release(g_app.pAudioEnumerator);
+                g_app.pAudioEnumerator = NULL;
+            }
+            CoUninitialize();
+
+            if (g_blackBrush) {
+                DeleteObject(g_blackBrush);
+                g_blackBrush = NULL;
+            }
+
             PostQuitMessage(0);
             break;
 
