@@ -161,13 +161,13 @@ BOOL CALLBACK CreateMonitorWindowsCallback(HMONITOR hMonitor, HDC hdcMonitor, LP
     if (g_currentMonitorIndex >= 16) return TRUE;
 
     if (app->config.monitorsEnabled[g_currentMonitorIndex]) {
-        HWND hWnd = CreateWindowEx(WS_EX_TOPMOST,
-                                  L"OLEDAegisScreen", L"",
-                                  WS_POPUP,
-                                  lprcMonitor->left, lprcMonitor->top,
-                                  lprcMonitor->right - lprcMonitor->left,
-                                  lprcMonitor->bottom - lprcMonitor->top,
-                                  NULL, NULL, GetModuleHandle(NULL), NULL);
+        HWND hWnd = CreateWindowExW(WS_EX_TOPMOST,
+                                   L"OLEDAegisScreen", L"",
+                                   WS_POPUP,
+                                   lprcMonitor->left, lprcMonitor->top,
+                                   lprcMonitor->right - lprcMonitor->left,
+                                   lprcMonitor->bottom - lprcMonitor->top,
+                                   NULL, NULL, GetModuleHandle(NULL), NULL);
 
         if (hWnd) {
             ShowWindow(hWnd, SW_SHOW);
@@ -530,7 +530,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
             RegisterClassW(&wc);
 
             CoInitialize(NULL);
-            HRESULT hr = CoCreateInstance(&CLSID_MMDeviceEnumerator, NULL, CLSCTX_ALL, IID_IMMDeviceEnumerator, (void**)&g_app.pAudioEnumerator);
+            HRESULT hr = CoCreateInstance(CLSID_MMDeviceEnumerator, NULL, CLSCTX_ALL, IID_IMMDeviceEnumerator, (void**)&g_app.pAudioEnumerator);
             if (SUCCEEDED(hr) && g_app.pAudioEnumerator) {
                 hr = g_app.pAudioEnumerator->lpVtbl->GetDefaultAudioEndpoint(g_app.pAudioEnumerator, eRender, eConsole, &g_app.pAudioDevice);
                 if (SUCCEEDED(hr) && g_app.pAudioDevice) {
@@ -652,14 +652,14 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
 }
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
-    WNDCLASS wc = {0};
+    WNDCLASSW wc = {0};
     wc.lpfnWndProc = WndProc;
     wc.hInstance = hInstance;
     wc.lpszClassName = L"OLEDAegisWindow";
 
-    RegisterClass(&wc);
+    RegisterClassW(&wc);
 
-    HWND hWnd = CreateWindowEx(0, L"OLEDAegisWindow", APP_NAME, 0, 0, 0, 0, 0, NULL, NULL, hInstance, NULL);
+    HWND hWnd = CreateWindowExW(0, L"OLEDAegisWindow", APP_NAME, 0, 0, 0, 0, 0, NULL, NULL, hInstance, NULL);
 
     MSG msg;
     while (GetMessage(&msg, NULL, 0, 0)) {
