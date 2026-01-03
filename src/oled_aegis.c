@@ -478,6 +478,17 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
         case WM_CREATE:
             memset(&g_app, 0, sizeof(g_app));
             g_app.hWnd = hWnd;
+            g_app.isShuttingDown = 0;
+
+            HANDLE hMutex = CreateMutexW(NULL, TRUE, L"OLEDAegis_SingleInstance");
+            if (GetLastError() == ERROR_ALREADY_EXISTS) {
+                MessageBoxW(NULL, L"OLED Aegis is already running", L"OLED Aegis", MB_OK | MB_ICONINFORMATION);
+                PostQuitMessage(0);
+                return -1;
+            }
+            if (hMutex) {
+                CloseHandle(hMutex);
+            }
 
             g_app.nid.cbSize = sizeof(NOTIFYICONDATAW);
             g_app.nid.hWnd = hWnd;
