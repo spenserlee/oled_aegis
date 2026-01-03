@@ -26,6 +26,11 @@ typedef struct {
     HMONITOR hMonitor;
     RECT rect;
     int monitorIndex;
+    char deviceName[32];
+    char displayName[64];
+    int isPrimary;
+    int width;
+    int height;
 } MonitorInfo;
 
 typedef struct {
@@ -54,15 +59,33 @@ static AppState g_app;
 
 static int g_currentMonitorIndex = 0;
 static HBRUSH g_blackBrush = NULL;
+static MonitorInfo g_monitors[16];
+static int g_monitorCount = 0;
 
 BOOL CALLBACK EnumMonitorCallback(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData) {
     MONITORINFOEX mi;
     mi.cbSize = sizeof(MONITORINFOEX);
-    GetMonitorInfo(hMonitor, &mi);
+    GetMonitorInfo(hMonitor, (LPMONITORINFO)&mi);
 
-    if (g_app.config.monitorCount < 16) {
-        g_app.config.monitorsEnabled[g_app.config.monitorCount] = 1;
-        g_app.config.monitorCount++;
+    if (g_monitorCount < 16) {
+        g_monitors[g_monitorCount].hMonitor = hMonitor;
+        g_monitors[g_monitorCount].rect = *lprcMonitor;
+        g_monitors[g_monitorCount].monitorIndex = g_monitorCount;
+        g_monitors[g_monitorCount].isPrimary = (mi.dwFlags & MONITORINFOF_PRIMARY) != 0;
+        g_monitors[g_monitorCount].width = lprcMonitor->right - lprcMonitor->left;
+        g_monitors[g_monitorCount].height = lprcMonitor->bottom - lprcMonitor->top;
+        
+        WideCharToMultiByte(CP_ACP, 0, mi.szDevice, -1,
+                           g_monitors[g_monitorCount].deviceName, 32, NULL, NULL);
+        
+        snprintf(g_monitors[g_monitorCount].displayName, 64,
+                "Display %d (%dx%d)%s",
+                g_monitorCount,
+                g_monitors[g_monitorCount].width,
+                g_monitors[g_monitorCount].height,
+                g_monitors[g_monitorCount].isPrimary ? " [Primary]" : "");
+        
+        g_monitorCount++;
     }
 
     return TRUE;
@@ -116,6 +139,8 @@ void LoadConfig() {
     SHGetFolderPathA(NULL, CSIDL_APPDATA, NULL, 0, configPath);
     strcat_s(configPath, sizeof(configPath), "\\oled_aegis.ini");
 
+    g_app.config.monitorCount = g_monitorCount;
+    
     FILE* f = fopen(configPath, "r");
     if (f) {
         char line[256];
@@ -150,7 +175,7 @@ void SaveConfig() {
         fprintf(f, "idleTimeout=%d\n", g_app.config.idleTimeout);
         fprintf(f, "audioDetectionEnabled=%d\n", g_app.config.audioDetectionEnabled);
         fprintf(f, "startupEnabled=%d\n", g_app.config.startupEnabled);
-        for (int i = 0; i < g_app.config.monitorCount; i++) {
+        for (int i = 0; i < g_monitorCount; i++) {
             fprintf(f, "monitor%d=%d\n", i, g_app.config.monitorsEnabled[i]);
         }
         fclose(f);
@@ -177,6 +202,11 @@ DWORD GetIdleTime() {
     lii.cbSize = sizeof(LASTINPUTINFO);
     GetLastInputInfo(&lii);
     return GetTickCount() - lii.dwTime;
+}
+
+void EnumerateMonitors() {
+    g_monitorCount = 0;
+    EnumDisplayMonitors(NULL, NULL, EnumMonitorCallback, 0);
 }
 
 int IsAudioPlaying() {
@@ -268,6 +298,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
                 g_app.config.monitorsEnabled[i] = 1;
             }
 
+            EnumerateMonitors();
             LoadConfig();
             UpdateStartupRegistry();
 
