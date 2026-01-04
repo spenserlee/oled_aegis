@@ -13,7 +13,7 @@
 #define WM_TRAYICON (WM_USER + 1)
 #define TIMER_IDLE_CHECK 1
 #define DEFAULT_IDLE_TIMEOUT 300
-#define MAX_LOG_FILES 10
+#define MAX_LOG_SIZE_BYTES (1 * 1024 * 1024)  // 1 MB log file size limit
 #define MANUAL_ACTIVATION_COOLDOWN_MS 2500
 
 typedef NTSTATUS (WINAPI *PFN_CallNtPowerInformation)(
@@ -163,6 +163,37 @@ void LoadTrayIcons() {
     }
 }
 
+void RotateLogFileIfNeeded() {
+    if (!g_logFile) return;
+
+    // Check current file size
+    long pos = ftell(g_logFile);
+    if (pos < 0 || pos < MAX_LOG_SIZE_BYTES) return;
+
+    // Close current log file
+    fclose(g_logFile);
+    g_logFile = NULL;
+
+    // Create path for old log file
+    char oldLogPath[MAX_PATH];
+    sprintf_s(oldLogPath, MAX_PATH, "%s.old", g_logFilePath);
+
+    // Delete existing .old file and rename current to .old
+    DeleteFileA(oldLogPath);
+    MoveFileA(g_logFilePath, oldLogPath);
+
+    // Reopen fresh log file
+    g_logFile = fopen(g_logFilePath, "a");
+    if (g_logFile) {
+        time_t now = time(NULL);
+        char timeStr[64];
+        ctime_s(timeStr, sizeof(timeStr), &now);
+        timeStr[24] = '\0';
+        fprintf(g_logFile, "\n=== Log rotated at %s (previous log saved as .old) ===\n", timeStr);
+        fflush(g_logFile);
+    }
+}
+
 void LogMessage(const char* format, ...) {
     if (!g_app.config.debugMode) return;
 
@@ -183,6 +214,9 @@ void LogMessage(const char* format, ...) {
     }
 
     if (g_logFile) {
+        // Check if log rotation is needed
+        RotateLogFileIfNeeded();
+
         time_t now = time(NULL);
         char timeStr[64];
         ctime_s(timeStr, sizeof(timeStr), &now);
