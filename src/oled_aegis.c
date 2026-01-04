@@ -833,6 +833,36 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
             }
             break;
 
+        case WM_DISPLAYCHANGE:
+            LogMessage("Display configuration changed - re-enumerating monitors");
+
+            // If screensaver is active, hide it first (monitor layout may have changed)
+            if (g_app.screenSaverActive) {
+                HideScreenSaver();
+                UpdateTrayIcon(0);
+            }
+
+            // Re-enumerate monitors to detect added/removed displays
+            int oldMonitorCount = g_monitorCount;
+            EnumerateMonitors();
+
+            // Enable any newly detected monitors by default
+            for (int i = oldMonitorCount; i < g_monitorCount; i++) {
+                g_app.config.monitorsEnabled[i] = 1;
+            }
+            g_app.config.monitorCount = g_monitorCount;
+
+            // If settings dialog is open, close and reopen to refresh monitor list
+            if (g_hSettingsDialog) {
+                LogMessage("Refreshing settings dialog for new monitor configuration");
+                DestroyWindow(g_hSettingsDialog);
+                g_hSettingsDialog = NULL;
+                ShowSettingsDialog();
+            }
+
+            LogMessage("Monitor configuration updated: %d -> %d monitors", oldMonitorCount, g_monitorCount);
+            break;
+
         case WM_TRAYICON:
             if (lParam == WM_RBUTTONUP) {
                 LogMessage("User: Right-clicked tray icon - opening context menu");
