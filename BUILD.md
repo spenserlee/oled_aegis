@@ -66,6 +66,21 @@ You need Visual Studio installed with the C++ build tools. You can use:
    ./build.sh debug
    ```
 
+#### Note on WSL development
+
+WSL is nice but obviously not an ideal Windows application development
+environment. To workaround LSP errors (e.g. missing "windows.h"), one can
+install `cargo-xwin` to obtain the necessary Windows SDK components:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+source "$HOME/.cargo/env"
+cargo install xwin --locked
+xwin --accept-license splat --output ~/.xwin
+# Update .clangd paths!
+# Unfortunately clangd configuration doesn't support env vars like $USER.
+```
+
 ## Manual Build
 
 If you prefer to compile manually from a Developer Command Prompt:
@@ -117,15 +132,6 @@ Make sure you have:
 - Windows 10 or Windows 11
 - Audio drivers installed (for audio detection feature)
 
-### Audio detection not working
-
-The audio detection feature requires:
-- A working default audio output device
-- Windows Audio service running
-- Windows Audio Session API (available on Windows 7+)
-
-If it doesn't work, set `audioDetectionEnabled=0` in oled_aegis.ini to disable it.
-
 ## Clean Build
 
 ### From Windows (build.bat)
@@ -164,4 +170,4 @@ The compiled `oled_aegis.exe` is a standalone executable. You can:
 - Run it from a USB drive
 - No installation required
 
-The application will automatically create its config file in `%APPDATA%\oled_aegis.ini` on first run.
+The application will automatically create its config file in `%APPDATA%\OLED_Aegis\oled_aegis.ini` on first run.

@@ -1,18 +1,44 @@
 # OLED Aegis
 
-A lightweight, reliable screen saver for Windows 10 and 11 designed specifically for OLED monitors.
+A lightweight, reliable screen saver for Windows.
 
-> **Note**: This is a Windows-only application. The source code uses Windows-specific APIs and will show compilation errors on non-Windows systems. Build instructions below require Visual Studio on Windows.
+## Why I made this
+
+Recently, I purchased my first OLED monitor and discovered that Windows 11
+built-in screen saver had some issues:
+
+* Randomly not activating after putting the computer to sleep.
+* Breaks Bluetooth pause/play interactions when the screen saver is active.
+* Does not provide a way to only turn on screen saver on one monitor in a
+  multi-monitor setup. (I only want to enable the screen saver on my OLED
+  monitor)
+
+Solution: make my own screen saver app and give it a bad name.
+
+OLED Aegis solves these problems by implementing a screen saver app in the
+simplest way possible - draw a black window after a period of user inactivity on
+the specified monitors.
+
+> **Note**: It should work just fine on Windows 10, but I only tested it on Windows 11.
 
 ## Features
 
-* **Per-Monitor Control**: Enable screen saver on specific monitors only (perfect for multi-monitor setups)
-* **Media Awareness**: Automatically pauses when audio is playing (Bluetooth pause/play works correctly)
+* **Per-Monitor Control**: Enable screen saver on specific monitors only
+* **Media Awareness**: Doesn't activate the screen saver on the target monitor if a video is playing on it
 * **Reliable Activation**: Consistently activates after system sleep/wake cycles
 * **Minimal Resource Usage**: Written in pure C with no external dependencies
 * **Simple Configuration**: Edit a plain text INI file or use the system tray menu
 * **System Tray Integration**: Taskbar icon for easy control
 * **Startup Support**: Automatically run when Windows starts
+
+## Known Issues
+
+Since this is just a regular Windows application, it cannot draw over special
+system windows such as the Start Menu, Task View, or Action center. Workaround
+tbd.
+
+As a failsafe, I recommend still enabling the the built-in screen saver with a
+longer timeout.
 
 ## Building
 
@@ -81,40 +107,21 @@ The screen saver will automatically deactivate when:
 1. Any user input is detected
 2. Audio starts playing (if `audioDetectionEnabled=1`)
 
-## How It Works
+## Why didn't you just make a custom Screen Saver (`.scr`)?
 
-OLED Aegis solves the problems with Windows' built-in screen saver by:
+Installing a custom `.scr` program indeed would resolve issues like not drawing
+over the Start Menu / Task View.
 
-1. **Direct Window Management**: Creates full-screen black windows directly using Windows API, bypassing the unreliable screen saver subsystem
-2. **Media Session Awareness**: Uses Windows Audio Session API to detect audio playback, ensuring Bluetooth media controls work correctly
-3. **Per-Monitor Enumeration**: Uses `EnumDisplayMonitors()` to discover and control each monitor independently
-4. **Timer-Based Activation**: Uses a simple timer loop that remains consistent across system sleep/wake cycles
+However, from my testing, it is not possible to have a real Windows screensaver
+(`.scr` launched by the OS) affect only one monitor while leaving the others
+showing their normal desktop / video playback.
 
-## Troubleshooting
+Even if a `.scr` program specifically draws on only one monitor, when Windows
+activates a screensaver due to timeout, Explorer switches into a screensaver
+mode and the desktop window manager creates an internal blank backdrop surface
+which is applied to *all* monitors.
 
-### Screen saver not activating
+Also, one of the primary issues I had with the built-in screen saver was it's
+apparent disabling of Bluetooth media controls, so using the built-in screen
+saver wouldn't resolve this particular issue.
 
-* Check that `idleTimeout` is set correctly in the INI file
-* Ensure `audioDetectionEnabled` isn't blocking activation (audio is playing)
-* Verify monitor settings (`monitorN=1` for each monitor you want to protect)
-
-### Bluetooth pause/play not working
-
-* Ensure `audioDetectionEnabled=1` in the configuration
-* This feature requires that Windows Audio Session API can detect audio output
-
-### Running at startup
-
-* Use the tray menu to "Enable Startup" OR set `startupEnabled=1` in the INI file
-* Requires adding a registry key to `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
-
-## Technical Details
-
-**Language**: C (C99 compatible)
-**Dependencies**: Windows API only (user32.lib, shell32.lib, ole32.lib, uuid.lib, gdi32.lib, advapi32.lib)
-**Build System**: Single-file unity build with Visual Studio's `cl.exe`
-**Resource Usage**: ~2-5 MB RAM when idle, minimal CPU usage (1-second timer loop)
-
-## License
-
-MIT License - Feel free to modify and distribute as needed for your OLED protection needs!
