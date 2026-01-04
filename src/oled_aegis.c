@@ -77,6 +77,8 @@ static MonitorInfo g_monitors[16];
 static int g_monitorCount = 0;
 static HWND g_hSettingsDialog = NULL;
 static HFONT g_hSettingsFont = NULL;
+static HICON g_hIconActive = NULL;
+static HICON g_hIconInactive = NULL;
 
 int ScaleDPI(int value) {
     return MulDiv(value, g_settingsDpi, 96);
@@ -113,6 +115,52 @@ void GetAppDataPath(char* buffer, size_t bufferSize) {
     sprintf_s(buffer, bufferSize, "%s\\OLED_Aegis", appDataPath);
 
     CreateDirectoryA(buffer, NULL);
+}
+
+void LoadTrayIcons() {
+    // Get the directory where the executable is located
+    char exePath[MAX_PATH];
+    char iconPath[MAX_PATH];
+
+    GetModuleFileNameA(NULL, exePath, MAX_PATH);
+
+    // Remove the executable name to get directory
+    char* lastSlash = strrchr(exePath, '\\');
+    if (lastSlash) {
+        *lastSlash = '\0';
+    }
+
+    // Try to load active icon from images subdirectory
+    sprintf_s(iconPath, MAX_PATH, "%s\\images\\oled_aegis_active.ico", exePath);
+    g_hIconActive = (HICON)LoadImageA(NULL, iconPath, IMAGE_ICON, 0, 0,
+                                      LR_LOADFROMFILE | LR_DEFAULTSIZE);
+
+    // If not found in images/, try same directory as exe
+    if (!g_hIconActive) {
+        sprintf_s(iconPath, MAX_PATH, "%s\\oled_aegis_active.ico", exePath);
+        g_hIconActive = (HICON)LoadImageA(NULL, iconPath, IMAGE_ICON, 0, 0,
+                                          LR_LOADFROMFILE | LR_DEFAULTSIZE);
+    }
+
+    // Try to load inactive icon from images subdirectory
+    sprintf_s(iconPath, MAX_PATH, "%s\\images\\oled_aegis_inactive.ico", exePath);
+    g_hIconInactive = (HICON)LoadImageA(NULL, iconPath, IMAGE_ICON, 0, 0,
+                                        LR_LOADFROMFILE | LR_DEFAULTSIZE);
+
+    // If not found in images/, try same directory as exe
+    if (!g_hIconInactive) {
+        sprintf_s(iconPath, MAX_PATH, "%s\\oled_aegis_inactive.ico", exePath);
+        g_hIconInactive = (HICON)LoadImageA(NULL, iconPath, IMAGE_ICON, 0, 0,
+                                            LR_LOADFROMFILE | LR_DEFAULTSIZE);
+    }
+
+    // Fall back to system icons if custom icons not found
+    if (!g_hIconActive) {
+        g_hIconActive = LoadIcon(NULL, IDI_APPLICATION);
+    }
+    if (!g_hIconInactive) {
+        g_hIconInactive = LoadIcon(NULL, IDI_INFORMATION);
+    }
 }
 
 void LogMessage(const char* format, ...) {
@@ -680,8 +728,7 @@ void ApplySettings(HWND hWnd) {
 }
 
 void UpdateTrayIcon(int active) {
-    HICON hIcon = LoadIcon(NULL, active ? IDI_APPLICATION : IDI_INFORMATION);
-    g_app.nid.hIcon = hIcon;
+    g_app.nid.hIcon = active ? g_hIconActive : g_hIconInactive;
     lstrcpyA(g_app.nid.szTip, active ? "OLED Aegis - Active" : "OLED Aegis - Idle");
     Shell_NotifyIconA(NIM_MODIFY, (PNOTIFYICONDATAA)&g_app.nid);
 }
@@ -703,12 +750,14 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
                 CloseHandle(hMutex);
             }
 
+            LoadTrayIcons();
+
             g_app.nid.cbSize = sizeof(NOTIFYICONDATAA);
             g_app.nid.hWnd = hWnd;
             g_app.nid.uID = 1;
             g_app.nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
             g_app.nid.uCallbackMessage = WM_TRAYICON;
-            g_app.nid.hIcon = LoadIcon(NULL, IDI_INFORMATION);
+            g_app.nid.hIcon = g_hIconInactive;
             lstrcpyA(g_app.nid.szTip, "OLED Aegis - Idle");
             Shell_NotifyIconA(NIM_ADD, &g_app.nid);
 
@@ -856,6 +905,16 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
             if (g_blackBrush) {
                 DeleteObject(g_blackBrush);
                 g_blackBrush = NULL;
+            }
+
+            // Clean up custom icons (only if loaded from file)
+            if (g_hIconActive && g_hIconActive != LoadIcon(NULL, IDI_APPLICATION)) {
+                DestroyIcon(g_hIconActive);
+                g_hIconActive = NULL;
+            }
+            if (g_hIconInactive && g_hIconInactive != LoadIcon(NULL, IDI_INFORMATION)) {
+                DestroyIcon(g_hIconInactive);
+                g_hIconInactive = NULL;
             }
 
             PostQuitMessage(0);
