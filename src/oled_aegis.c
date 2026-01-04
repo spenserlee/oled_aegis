@@ -32,6 +32,8 @@ void ApplySettings(HWND hWnd);
 LRESULT CALLBACK SettingsDialogProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK TimeoutEditSubclassProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
 void ShowScreenSaver(int isManual);
+void HideScreenSaver();
+void UpdateTrayIcon(int active);
 
 typedef struct {
     HMONITOR hMonitor;
@@ -162,7 +164,12 @@ BOOL CALLBACK EnumMonitorCallback(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprc
 }
 
 LRESULT CALLBACK MonitorWindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    static DWORD ignoreInputUntil = 0;
+
     switch (message) {
+        case WM_CREATE:
+            ignoreInputUntil = GetTickCount() + 500;
+            break;
         case WM_PAINT:
         {
             PAINTSTRUCT ps;
@@ -173,6 +180,18 @@ LRESULT CALLBACK MonitorWindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARA
             EndPaint(hWnd, &ps);
             break;
         }
+        case WM_LBUTTONDOWN:
+        case WM_RBUTTONDOWN:
+        case WM_MBUTTONDOWN:
+        case WM_KEYDOWN:
+        case WM_SYSKEYDOWN:
+            if (GetTickCount() < ignoreInputUntil) {
+                break;
+            }
+            LogMessage("Input detected on monitor window (msg: %u)", message);
+            HideScreenSaver();
+            UpdateTrayIcon(0);
+            break;
         default:
             return DefWindowProc(hWnd, message, wParam, lParam);
     }
@@ -426,12 +445,12 @@ LRESULT CALLBACK TimeoutEditSubclassProc(HWND hWnd, UINT message, WPARAM wParam,
         int value = atoi(buffer);
 
         if (zDelta > 0) {
-            value += 10;
+            value += 5;
         } else {
-            value -= 10;
+            value -= 5;
         }
 
-        if (value < 10) value = 10;
+        if (value < 5) value = 5;
         if (value > 3600) value = 3600;
 
         sprintf_s(buffer, 32, "%d", value);
@@ -653,7 +672,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
                 }
             }
 
-            SetTimer(hWnd, TIMER_IDLE_CHECK, 1000, NULL);
+            SetTimer(hWnd, TIMER_IDLE_CHECK, 500, NULL);
 
             break;
 
