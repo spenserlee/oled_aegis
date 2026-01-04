@@ -81,12 +81,20 @@ static HWND g_hSettingsDialog = NULL;
 static HFONT g_hSettingsFont = NULL;
 static WNDPROC g_originalTimeoutEditProc = NULL;
 
+void GetAppDataPath(char* buffer, size_t bufferSize) {
+    char appDataPath[MAX_PATH];
+    SHGetFolderPathA(NULL, CSIDL_APPDATA, NULL, 0, appDataPath);
+    sprintf_s(buffer, bufferSize, "%s\\OLED_Aegis", appDataPath);
+
+    CreateDirectoryA(buffer, NULL);
+}
+
 void LogMessage(const char* format, ...) {
     if (!g_app.config.debugMode) return;
-
+    
     if (!g_logFile) {
         char appDataPath[MAX_PATH];
-        SHGetFolderPathA(NULL, CSIDL_APPDATA, NULL, 0, appDataPath);
+        GetAppDataPath(appDataPath, sizeof(appDataPath));
         sprintf_s(g_logFilePath, MAX_PATH, "%s\\oled_aegis_debug.log", appDataPath);
 
         g_logFile = fopen(g_logFilePath, "a");
@@ -197,9 +205,10 @@ BOOL CALLBACK CreateMonitorWindowsCallback(HMONITOR hMonitor, HDC hdcMonitor, LP
 }
 
 int ConfigFileExists() {
+    char appDataPath[MAX_PATH];
     char configPath[MAX_PATH];
-    SHGetFolderPathA(NULL, CSIDL_APPDATA, NULL, 0, configPath);
-    strcat_s(configPath, sizeof(configPath), "\\oled_aegis.ini");
+    GetAppDataPath(appDataPath, sizeof(appDataPath));
+    sprintf_s(configPath, sizeof(configPath), "%s\\oled_aegis.ini", appDataPath);
 
     FILE* f = fopen(configPath, "r");
     if (f) {
@@ -210,9 +219,10 @@ int ConfigFileExists() {
 }
 
 void LoadConfig() {
+    char appDataPath[MAX_PATH];
     char configPath[MAX_PATH];
-    SHGetFolderPathA(NULL, CSIDL_APPDATA, NULL, 0, configPath);
-    strcat_s(configPath, sizeof(configPath), "\\oled_aegis.ini");
+    GetAppDataPath(appDataPath, sizeof(appDataPath));
+    sprintf_s(configPath, sizeof(configPath), "%s\\oled_aegis.ini", appDataPath);
 
     g_app.config.monitorCount = g_monitorCount;
 
@@ -243,9 +253,10 @@ void LoadConfig() {
 }
 
 void SaveConfig() {
+    char appDataPath[MAX_PATH];
     char configPath[MAX_PATH];
-    SHGetFolderPathA(NULL, CSIDL_APPDATA, NULL, 0, configPath);
-    strcat_s(configPath, sizeof(configPath), "\\oled_aegis.ini");
+    GetAppDataPath(appDataPath, sizeof(appDataPath));
+    sprintf_s(configPath, sizeof(configPath), "%s\\oled_aegis.ini", appDataPath);
 
     FILE* f = fopen(configPath, "w");
     if (f) {
@@ -360,9 +371,10 @@ void HideScreenSaver() {
 }
 
 void OpenConfigFileLocation() {
+    char appDataPath[MAX_PATH];
     char configPath[MAX_PATH];
-    SHGetFolderPathA(NULL, CSIDL_APPDATA, NULL, 0, configPath);
-    strcat_s(configPath, sizeof(configPath), "\\oled_aegis.ini");
+    GetAppDataPath(appDataPath, sizeof(appDataPath));
+    sprintf_s(configPath, sizeof(configPath), "%s\\oled_aegis.ini", appDataPath);
 
     char selectCmd[MAX_PATH + 20];
     sprintf_s(selectCmd, sizeof(selectCmd), "/select,\"%s\"", configPath);
