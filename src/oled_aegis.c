@@ -568,6 +568,7 @@ void ShowSettingsDialog() {
     wc.hInstance = GetModuleHandle(NULL);
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+    wc.hIcon = g_hIconActive;
     wc.lpszClassName = "OLED Aegis Settings Dialog";
     RegisterClassA(&wc);
 
