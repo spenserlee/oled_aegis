@@ -3,29 +3,26 @@
 #include <shlobj.h>
 #include <stdio.h>
 #include <time.h>
-#include <mmdeviceapi.h>
-#include <endpointvolume.h>
-#include <audioclient.h>
 #include <stdarg.h>
 #include <commctrl.h>
+#include <powerbase.h>
 #pragma comment(lib, "comctl32.lib")
-
-static const GUID IID_IMMDeviceEnumerator_impl = {0xA95664D2, 0x9614, 0x4F35, 0xA7, 0x46, 0xDE, 0x8D, 0xB6, 0x36, 0x17, 0xE6};
-static const GUID CLSID_MMDeviceEnumerator_impl = {0xBCDE0395, 0xE52F, 0x467C, 0x8E, 0x3D, 0xC4, 0x57, 0x92, 0x91, 0x69, 0x2E};
-static const GUID IID_IAudioMeterInformation_impl = {0xC02216F6, 0x8C63, 0x4B94, 0x98, 0x5F, 0x13, 0x89, 0xD8, 0x2F, 0x98, 0x5E};
-
-#define IID_IMMDeviceEnumerator (&IID_IMMDeviceEnumerator_impl)
-#define CLSID_MMDeviceEnumerator (&CLSID_MMDeviceEnumerator_impl)
-#define IID_IAudioMeterInformation (&IID_IAudioMeterInformation_impl)
+#pragma comment(lib, "powrprof.lib")
 
 #define APP_NAME L"OLED Aegis"
 #define WM_TRAYICON (WM_USER + 1)
 #define TIMER_IDLE_CHECK 1
-#define TIMER_AUDIO_CHECK 2
 #define DEFAULT_IDLE_TIMEOUT 300
-#define DEFAULT_AUDIO_THRESHOLD 0.001f
 #define MAX_LOG_FILES 10
 #define MANUAL_ACTIVATION_COOLDOWN_MS 2500
+
+typedef NTSTATUS (WINAPI *PFN_CallNtPowerInformation)(
+    POWER_INFORMATION_LEVEL InformationLevel,
+    PVOID InputBuffer,
+    ULONG InputBufferLength,
+    PVOID OutputBuffer,
+    ULONG OutputBufferLength
+);
 
 static char g_logFilePath[MAX_PATH];
 static FILE* g_logFile = NULL;
@@ -49,7 +46,7 @@ typedef struct {
 
 typedef struct {
     int idleTimeout;
-    int audioDetectionEnabled;
+    int mediaDetectionEnabled;
     int monitorsEnabled[16];
     int monitorCount;
     int startupEnabled;
@@ -64,10 +61,7 @@ typedef struct {
     NOTIFYICONDATA nid;
     int screenSaverActive;
     time_t lastInputTime;
-    int isAudioPlaying;
-    IMMDeviceEnumerator *pAudioEnumerator;
-    IMMDevice *pAudioDevice;
-    IAudioMeterInformation *pAudioMeter;
+    int isMediaPlaying;
     int isShuttingDown;
     int cursorHidden;
     DWORD manualActivationTime;
@@ -136,10 +130,10 @@ BOOL CALLBACK EnumMonitorCallback(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprc
         g_monitors[g_monitorCount].rect = *lprcMonitor;
         g_monitors[g_monitorCount].monitorIndex = g_monitorCount;
         g_monitors[g_monitorCount].isPrimary = (mi.dwFlags & MONITORINFOF_PRIMARY) != 0;
-        
+
         WideCharToMultiByte(CP_ACP, 0, mi.szDevice, -1,
                            g_monitors[g_monitorCount].deviceName, 32, NULL, NULL);
-        
+
         DEVMODEA dm = {0};
         dm.dmSize = sizeof(DEVMODEA);
         if (EnumDisplaySettingsA(mi.szDevice, ENUM_CURRENT_SETTINGS, &dm)) {
@@ -149,14 +143,14 @@ BOOL CALLBACK EnumMonitorCallback(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprc
             g_monitors[g_monitorCount].width = lprcMonitor->right - lprcMonitor->left;
             g_monitors[g_monitorCount].height = lprcMonitor->bottom - lprcMonitor->top;
         }
-        
+
         snprintf(g_monitors[g_monitorCount].displayName, 64,
                 "Display %d (%dx%d)%s",
                 g_monitorCount,
                 g_monitors[g_monitorCount].width,
                 g_monitors[g_monitorCount].height,
                 g_monitors[g_monitorCount].isPrimary ? " [Primary]" : "");
-        
+
         g_monitorCount++;
     }
 
@@ -254,7 +248,9 @@ void LoadConfig() {
                 if (strcmp(key, "idleTimeout") == 0) {
                     g_app.config.idleTimeout = atoi(value);
                 } else if (strcmp(key, "audioDetectionEnabled") == 0) {
-                    g_app.config.audioDetectionEnabled = atoi(value);
+                    g_app.config.mediaDetectionEnabled = atoi(value);
+                } else if (strcmp(key, "mediaDetectionEnabled") == 0) {
+                    g_app.config.mediaDetectionEnabled = atoi(value);
                 } else if (strcmp(key, "startupEnabled") == 0) {
                     g_app.config.startupEnabled = atoi(value);
                 } else if (strcmp(key, "debugMode") == 0) {
@@ -280,7 +276,7 @@ void SaveConfig() {
     FILE* f = fopen(configPath, "w");
     if (f) {
         fprintf(f, "idleTimeout=%d\n", g_app.config.idleTimeout);
-        fprintf(f, "audioDetectionEnabled=%d\n", g_app.config.audioDetectionEnabled);
+        fprintf(f, "mediaDetectionEnabled=%d\n", g_app.config.mediaDetectionEnabled);
         fprintf(f, "startupEnabled=%d\n", g_app.config.startupEnabled);
         fprintf(f, "debugMode=%d\n", g_app.config.debugMode);
         for (int i = 0; i < g_monitorCount; i++) {
@@ -322,23 +318,42 @@ void EnumerateMonitors() {
     LogMessage("Enumerated %d monitors", g_monitorCount);
 }
 
-int IsAudioPlaying() {
-    if (!g_app.config.audioDetectionEnabled) {
+int IsMediaPlaying() {
+    if (!g_app.config.mediaDetectionEnabled) {
         return 0;
     }
 
-    if (!g_app.pAudioMeter) {
+    static HMODULE hPowrProf = NULL;
+    static PFN_CallNtPowerInformation pfnCallNtPowerInformation = NULL;
+
+    if (!hPowrProf) {
+        hPowrProf = LoadLibraryW(L"powrprof.dll");
+    }
+
+    if (hPowrProf && !pfnCallNtPowerInformation) {
+        pfnCallNtPowerInformation = (PFN_CallNtPowerInformation)GetProcAddress(hPowrProf, "CallNtPowerInformation");
+    }
+
+    if (!pfnCallNtPowerInformation) {
         return 0;
     }
 
-    float peakValue = 0.0f;
-    int result = 0;
-    HRESULT hr = g_app.pAudioMeter->lpVtbl->GetPeakValue(g_app.pAudioMeter, &peakValue);
-    if (SUCCEEDED(hr)) {
-        result = (peakValue > DEFAULT_AUDIO_THRESHOLD);
+    ULONG executionState = 0;
+    NTSTATUS status = pfnCallNtPowerInformation(
+        SystemExecutionState,
+        NULL, 0,
+        &executionState, sizeof(executionState)
+    );
+
+    if (status == 0) {
+        int isPlaying = (executionState & ES_DISPLAY_REQUIRED) != 0;
+        LogMessage("Media detection: executionState=0x%08X, ES_DISPLAY_REQUIRED=%d, mediaPlaying=%d",
+                 executionState, (executionState & ES_DISPLAY_REQUIRED) != 0, isPlaying);
+        return isPlaying;
     }
 
-    return result;
+    LogMessage("Media detection: CallNtPowerInformation failed with status=%d", status);
+    return 0;
 }
 
 void ShowScreenSaver(int isManual) {
@@ -487,10 +502,10 @@ void ShowSettingsDialog() {
                      0, 0, 0, 0, g_hSettingsDialog, NULL, hMod, hTimeoutEdit);
         SendMessage(hTimeoutUpDown, UDM_SETRANGE, 0, MAKELPARAM(3600, 5));
 
-        HWND hAudioCheck = CreateWindowA("BUTTON", "Enable Audio Detection",
+        HWND hAudioCheck = CreateWindowA("BUTTON", "Prevent Screen Saver During Media Playback",
                      WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                     20, 50, 220, 20, g_hSettingsDialog, (HMENU)1002, hMod, NULL);
-        HWND hDebugCheck = CreateWindowA("BUTTON", "Debug Mode (Ignore Audio)",
+                     20, 50, 260, 20, g_hSettingsDialog, (HMENU)1002, hMod, NULL);
+        HWND hDebugCheck = CreateWindowA("BUTTON", "Debug Mode",
                      WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
                      20, 75, 220, 20, g_hSettingsDialog, (HMENU)1003, hMod, NULL);
         HWND hStartupCheck = CreateWindowA("BUTTON", "Run at Startup",
@@ -549,7 +564,7 @@ void ShowSettingsDialog() {
         sprintf_s(buffer, 32, "%d", g_app.config.idleTimeout);
         SetDlgItemTextA(g_hSettingsDialog, 1001, buffer);
 
-        CheckDlgButton(g_hSettingsDialog, 1002, g_app.config.audioDetectionEnabled ? BST_CHECKED : BST_UNCHECKED);
+        CheckDlgButton(g_hSettingsDialog, 1002, g_app.config.mediaDetectionEnabled ? BST_CHECKED : BST_UNCHECKED);
         CheckDlgButton(g_hSettingsDialog, 1003, g_app.config.debugMode ? BST_CHECKED : BST_UNCHECKED);
         CheckDlgButton(g_hSettingsDialog, 1004, g_app.config.startupEnabled ? BST_CHECKED : BST_UNCHECKED);
 
@@ -568,11 +583,11 @@ void ApplySettings(HWND hWnd) {
     int oldTimeout = g_app.config.idleTimeout;
     g_app.config.idleTimeout = atoi(buffer);
 
-    int oldAudio = g_app.config.audioDetectionEnabled;
+    int oldMedia = g_app.config.mediaDetectionEnabled;
     int oldDebug = g_app.config.debugMode;
     int oldStartup = g_app.config.startupEnabled;
 
-    g_app.config.audioDetectionEnabled = IsDlgButtonChecked(hWnd, 1002) == BST_CHECKED;
+    g_app.config.mediaDetectionEnabled = IsDlgButtonChecked(hWnd, 1002) == BST_CHECKED;
     g_app.config.debugMode = IsDlgButtonChecked(hWnd, 1003) == BST_CHECKED;
     g_app.config.startupEnabled = IsDlgButtonChecked(hWnd, 1004) == BST_CHECKED;
 
@@ -583,9 +598,9 @@ void ApplySettings(HWND hWnd) {
     SaveConfig();
     UpdateStartupRegistry();
 
-    LogMessage("Settings applied: timeout %ds->%ds, audio %d->%d, debug %d->%d, startup %d->%d",
+    LogMessage("Settings applied: timeout %ds->%ds, media %d->%d, debug %d->%d, startup %d->%d",
              oldTimeout, g_app.config.idleTimeout,
-             oldAudio, g_app.config.audioDetectionEnabled,
+             oldMedia, g_app.config.mediaDetectionEnabled,
              oldDebug, g_app.config.debugMode,
              oldStartup, g_app.config.startupEnabled);
 }
@@ -624,7 +639,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
             Shell_NotifyIconW(NIM_ADD, &g_app.nid);
 
             g_app.config.idleTimeout = DEFAULT_IDLE_TIMEOUT;
-            g_app.config.audioDetectionEnabled = 1;
+            g_app.config.mediaDetectionEnabled = 1;
             g_app.config.startupEnabled = 0;
             g_app.config.debugMode = 0;
             for (int i = 0; i < 16; i++) {
@@ -640,8 +655,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
             LoadConfig();
             UpdateStartupRegistry();
 
-            LogMessage("Application started. Timeout: %ds, Audio: %d, Debug: %d",
-                     g_app.config.idleTimeout, g_app.config.audioDetectionEnabled, g_app.config.debugMode);
+            LogMessage("Application started. Timeout: %ds, Media: %d, Debug: %d",
+                     g_app.config.idleTimeout, g_app.config.mediaDetectionEnabled, g_app.config.debugMode);
 
             g_blackBrush = CreateSolidBrush(RGB(0, 0, 0));
 
@@ -653,15 +668,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
             wc.lpszClassName = L"OLEDAegisScreen";
             RegisterClassW(&wc);
 
-            CoInitialize(NULL);
-            HRESULT hr = CoCreateInstance(CLSID_MMDeviceEnumerator, NULL, CLSCTX_ALL, IID_IMMDeviceEnumerator, (void**)&g_app.pAudioEnumerator);
-            if (SUCCEEDED(hr) && g_app.pAudioEnumerator) {
-                hr = g_app.pAudioEnumerator->lpVtbl->GetDefaultAudioEndpoint(g_app.pAudioEnumerator, eRender, eConsole, &g_app.pAudioDevice);
-                if (SUCCEEDED(hr) && g_app.pAudioDevice) {
-                    hr = g_app.pAudioDevice->lpVtbl->Activate(g_app.pAudioDevice, IID_IAudioMeterInformation, CLSCTX_ALL, NULL, (void**)&g_app.pAudioMeter);
-                }
-            }
-
             SetTimer(hWnd, TIMER_IDLE_CHECK, 500, NULL);
 
             break;
@@ -669,9 +675,12 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
         case WM_TIMER:
             if (wParam == TIMER_IDLE_CHECK) {
                 DWORD idleTime = GetIdleTime();
-                int audioPlaying = g_app.config.debugMode ? 0 : IsAudioPlaying();
+                int mediaPlaying = IsMediaPlaying();
+                if (mediaPlaying) {
+                    LogMessage("Timer: Media playback detected, preventing screen saver");
+                }
 
-                if (!audioPlaying && idleTime > (DWORD)(g_app.config.idleTimeout * 1000)) {
+                if (!mediaPlaying && idleTime > (DWORD)(g_app.config.idleTimeout * 1000)) {
                     if (!g_app.screenSaverActive) {
                         LogMessage("Timer: Activating screen saver (idle: %lums)", idleTime);
                         ShowScreenSaver(0);
@@ -692,7 +701,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
                                 }
                             }
                         } else {
-                            LogMessage("Timer: Deactivating screen saver (idle: %lums, audio: %d)", idleTime, audioPlaying);
+                            LogMessage("Timer: Deactivating screen saver (idle: %lums, media: %d)", idleTime, mediaPlaying);
                             HideScreenSaver();
                             UpdateTrayIcon(0);
                         }
@@ -769,20 +778,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
                 fclose(g_logFile);
                 g_logFile = NULL;
             }
-
-            if (g_app.pAudioMeter) {
-                g_app.pAudioMeter->lpVtbl->Release(g_app.pAudioMeter);
-                g_app.pAudioMeter = NULL;
-            }
-            if (g_app.pAudioDevice) {
-                g_app.pAudioDevice->lpVtbl->Release(g_app.pAudioDevice);
-                g_app.pAudioDevice = NULL;
-            }
-            if (g_app.pAudioEnumerator) {
-                g_app.pAudioEnumerator->lpVtbl->Release(g_app.pAudioEnumerator);
-                g_app.pAudioEnumerator = NULL;
-            }
-            CoUninitialize();
 
             if (g_blackBrush) {
                 DeleteObject(g_blackBrush);

@@ -34,8 +34,15 @@ the specified monitors.
 ## Known Issues
 
 Since this is just a regular Windows application, it cannot draw over special
-system windows such as the Start Menu, Task View, or Action center. Workaround
+system windows such as Start Menu, Task View, or Action center. Workaround
 tbd.
+
+**Media Detection Limitation**: The media detection feature uses system-wide Windows Power Management APIs, which cannot distinguish which specific monitor has media playing. If media is playing on ANY monitor (including those with screen saver disabled), it will prevent screen saver activation on ALL configured monitors.
+
+Potential future improvements:
+- Detect fullscreen windows on each monitor to enable per-monitor media awareness
+- Query window titles/processes for media players on specific monitors
+- Allow per-monitor override of media detection setting
 
 As a failsafe, I recommend still enabling the the built-in screen saver with a
 longer timeout.
@@ -61,7 +68,7 @@ build.bat
 
 ### Manual Build
 ```batch
-cl.exe src\oled_aegis.c /Fe:oled_aegis.exe /O2 /MD /link user32.lib shell32.lib ole32.lib uuid.lib gdi32.lib advapi32.lib comctl32.lib
+cl.exe src\oled_aegis.c /Fe:oled_aegis.exe /O2 /MD /link user32.lib shell32.lib ole32.lib uuid.lib gdi32.lib advapi32.lib comctl32.lib powrprof.lib
 ```
 
 See [BUILD.md](BUILD.md) for detailed build instructions and troubleshooting.
@@ -72,7 +79,7 @@ Configuration is stored in `%APPDATA%\oled_aegis.ini`. This file is created auto
 
 ```ini
 idleTimeout=300
-audioDetectionEnabled=1
+mediaDetectionEnabled=1
 startupEnabled=0
 monitor0=1
 monitor1=1
@@ -82,7 +89,7 @@ monitor2=1
 ### Settings
 
 * **idleTimeout**: Seconds of inactivity before screen saver activates (default: 300 seconds = 5 minutes)
-* **audioDetectionEnabled**: Set to `1` to check for audio playback, `0` to ignore (default: 1)
+* **mediaDetectionEnabled**: Set to `1` to prevent screen saver during media playback, `0` to disable (default: 1)
 * **startupEnabled**: Set to `1` to run at Windows startup, `0` to disable (default: 0)
 * **monitorN**: Set to `1` to enable screen saver on monitor N, `0` to disable (default: 1 for all)
 
@@ -101,11 +108,11 @@ monitor2=1
 
 The screen saver will automatically activate when:
 1. No user input (keyboard/mouse) for `idleTimeout` seconds
-2. No audio is playing (if `audioDetectionEnabled=1`)
+2. No media is playing (if `mediaDetectionEnabled=1`)
 
 The screen saver will automatically deactivate when:
 1. Any user input is detected
-2. Audio starts playing (if `audioDetectionEnabled=1`)
+2. Media starts playing (if `mediaDetectionEnabled=1`)
 
 ## Why didn't you just make a custom Screen Saver (`.scr`)?
 

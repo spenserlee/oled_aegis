@@ -86,7 +86,7 @@ xwin --accept-license splat --output ~/.xwin
 If you prefer to compile manually from a Developer Command Prompt:
 
 ```batch
-cl.exe src\oled_aegis.c /Fe:oled_aegis.exe /O2 /MD /link user32.lib shell32.lib ole32.lib uuid.lib gdi32.lib advapi32.lib comctl32.lib
+cl.exe src\oled_aegis.c /Fe:oled_aegis.exe /O2 /MD /link user32.lib shell32.lib ole32.lib uuid.lib gdi32.lib advapi32.lib comctl32.lib powrprof.lib
 ```
 
 ## Build Options
@@ -112,11 +112,12 @@ The PowerShell build script includes:
 
 * **user32.lib** - Windows user interface functions
 * **shell32.lib** - Shell functions (for system tray)
-* **ole32.lib** - COM functions (for audio detection)
-* **uuid.lib** - GUID definitions for audio APIs
+* **ole32.lib** - COM functions
+* **uuid.lib** - GUID definitions for COM interfaces
 * **gdi32.lib** - Graphics Device Interface (for creating solid black brushes)
 * **advapi32.lib** - Advanced Windows APIs (for registry functions)
 * **comctl32.lib** - Common Controls library (for NumericUpDown control)
+* **powrprof.lib** - Power Profile library (for media detection)
 
 ## Troubleshooting
 
@@ -131,7 +132,6 @@ This means you're not using a Developer Command Prompt. You need to:
 
 Make sure you have:
 - Windows 10 or Windows 11
-- Audio drivers installed (for audio detection feature)
 
 ## Clean Build
 
