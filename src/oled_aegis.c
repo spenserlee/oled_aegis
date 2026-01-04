@@ -292,12 +292,16 @@ void SaveConfig() {
 
 void UpdateStartupRegistry() {
     HKEY hKey;
-    TCHAR exePath[MAX_PATH];
-    GetModuleFileName(NULL, exePath, MAX_PATH);
+    WCHAR exePath[MAX_PATH];
+    GetModuleFileNameW(NULL, exePath, MAX_PATH);
 
     if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
         if (g_app.config.startupEnabled) {
-            RegSetValueExW(hKey, APP_NAME, 0, REG_SZ, (BYTE*)exePath, (DWORD)(wcslen(exePath) + 1) * sizeof(TCHAR));
+            DWORD valueSize = (DWORD)((wcslen(exePath) + 1) * sizeof(WCHAR));
+            LONG result = RegSetValueExW(hKey, APP_NAME, 0, REG_SZ, (BYTE*)exePath, valueSize);
+            if (result == ERROR_SUCCESS) {
+                RegFlushKey(hKey);
+            }
         } else {
             RegDeleteValueW(hKey, APP_NAME);
         }
