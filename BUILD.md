@@ -86,7 +86,7 @@ xwin --accept-license splat --output ~/.xwin
 If you prefer to compile manually from a Developer Command Prompt:
 
 ```batch
-cl.exe src\oled_aegis.c /Fe:oled_aegis.exe /O2 /MD /link user32.lib shell32.lib ole32.lib uuid.lib gdi32.lib advapi32.lib
+cl.exe src\oled_aegis.c /Fe:oled_aegis.exe /O2 /MD /link user32.lib shell32.lib ole32.lib uuid.lib gdi32.lib advapi32.lib comctl32.lib
 ```
 
 ## Build Options
@@ -116,6 +116,7 @@ The PowerShell build script includes:
 * **uuid.lib** - GUID definitions for audio APIs
 * **gdi32.lib** - Graphics Device Interface (for creating solid black brushes)
 * **advapi32.lib** - Advanced Windows APIs (for registry functions)
+* **comctl32.lib** - Common Controls library (for NumericUpDown control)
 
 ## Troubleshooting
 

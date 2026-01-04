@@ -61,7 +61,7 @@ build.bat
 
 ### Manual Build
 ```batch
-cl.exe src\oled_aegis.c /Fe:oled_aegis.exe /O2 /MD /link user32.lib shell32.lib ole32.lib uuid.lib gdi32.lib advapi32.lib
+cl.exe src\oled_aegis.c /Fe:oled_aegis.exe /O2 /MD /link user32.lib shell32.lib ole32.lib uuid.lib gdi32.lib advapi32.lib comctl32.lib
 ```
 
 See [BUILD.md](BUILD.md) for detailed build instructions and troubleshooting.

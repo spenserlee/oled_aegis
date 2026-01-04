@@ -51,11 +51,11 @@ Write-Host "Building OLED Aegis ($buildType)..." -ForegroundColor Green
 if ($buildType -eq "debug") {
     # Debug Compile
     Write-Host "Configuration: Debug" -ForegroundColor Yellow
-    cl.exe -FC -Zi -MDd /D "INITGUID" "$sourceFile" /Fe:"$outputExe" /link user32.lib shell32.lib ole32.lib uuid.lib gdi32.lib advapi32.lib
+    cl.exe -FC -Zi -MDd /D "INITGUID" "$sourceFile" /Fe:"$outputExe" /link user32.lib shell32.lib ole32.lib uuid.lib gdi32.lib advapi32.lib comctl32.lib
 } else {
     # Optimized Compile (Release)
     Write-Host "Configuration: Release (Optimized)" -ForegroundColor Yellow
-    cl.exe -O2 -FC -MD /D "INITGUID" "$sourceFile" /Fe:"$outputExe" /link user32.lib shell32.lib ole32.lib uuid.lib gdi32.lib advapi32.lib
+    cl.exe -O2 -FC -MD /D "INITGUID" "$sourceFile" /Fe:"$outputExe" /link user32.lib shell32.lib ole32.lib uuid.lib gdi32.lib advapi32.lib comctl32.lib
 }
 
 if ($LASTEXITCODE -eq 0) {

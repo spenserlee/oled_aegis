@@ -7,6 +7,8 @@
 #include <endpointvolume.h>
 #include <audioclient.h>
 #include <stdarg.h>
+#include <commctrl.h>
+#pragma comment(lib, "comctl32.lib")
 
 static const GUID IID_IMMDeviceEnumerator_impl = {0xA95664D2, 0x9614, 0x4F35, 0xA7, 0x46, 0xDE, 0x8D, 0xB6, 0x36, 0x17, 0xE6};
 static const GUID CLSID_MMDeviceEnumerator_impl = {0xBCDE0395, 0xE52F, 0x467C, 0x8E, 0x3D, 0xC4, 0x57, 0x92, 0x91, 0x69, 0x2E};
@@ -30,7 +32,6 @@ static FILE* g_logFile = NULL;
 
 void ApplySettings(HWND hWnd);
 LRESULT CALLBACK SettingsDialogProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
-LRESULT CALLBACK TimeoutEditSubclassProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
 void ShowScreenSaver(int isManual);
 void HideScreenSaver();
 void UpdateTrayIcon(int active);
@@ -81,7 +82,6 @@ static MonitorInfo g_monitors[16];
 static int g_monitorCount = 0;
 static HWND g_hSettingsDialog = NULL;
 static HFONT g_hSettingsFont = NULL;
-static WNDPROC g_originalTimeoutEditProc = NULL;
 
 void GetAppDataPath(char* buffer, size_t bufferSize) {
     char appDataPath[MAX_PATH];
@@ -431,34 +431,12 @@ LRESULT CALLBACK SettingsDialogProc(HWND hWnd, UINT message, WPARAM wParam, LPAR
                 DeleteObject(g_hSettingsFont);
                 g_hSettingsFont = NULL;
             }
-            g_originalTimeoutEditProc = NULL;
             return 0;
     }
     return DefWindowProc(hWnd, message, wParam, lParam);
 }
 
-LRESULT CALLBACK TimeoutEditSubclassProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
-    if (message == WM_MOUSEWHEEL) {
-        short zDelta = GET_WHEEL_DELTA_WPARAM(wParam);
-        char buffer[32];
-        GetWindowTextA(hWnd, buffer, 32);
-        int value = atoi(buffer);
 
-        if (zDelta > 0) {
-            value += 5;
-        } else {
-            value -= 5;
-        }
-
-        if (value < 5) value = 5;
-        if (value > 3600) value = 3600;
-
-        sprintf_s(buffer, 32, "%d", value);
-        SetWindowTextA(hWnd, buffer);
-        return 0;
-    }
-    return CallWindowProcA(g_originalTimeoutEditProc, hWnd, message, wParam, lParam);
-}
 
 void ShowSettingsDialog() {
     if (g_hSettingsDialog) {
@@ -489,12 +467,21 @@ void ShowSettingsDialog() {
     if (g_hSettingsDialog) {
         SetWindowLongPtr(g_hSettingsDialog, GWLP_WNDPROC, (LONG_PTR)SettingsDialogProc);
 
+        INITCOMMONCONTROLSEX icex;
+        icex.dwSize = sizeof(INITCOMMONCONTROLSEX);
+        icex.dwICC = ICC_UPDOWN_CLASS;
+        InitCommonControlsEx(&icex);
+
         HWND hTimeoutLabel = CreateWindowA("STATIC", "Idle Timeout (seconds):",
                      WS_CHILD | WS_VISIBLE,
                      20, 20, 180, 20, g_hSettingsDialog, NULL, hMod, NULL);
-        HWND hTimeoutEdit = CreateWindowA("EDIT", "",
+        HWND hTimeoutEdit = CreateWindowExA(0, "EDIT", "",
                      WS_CHILD | WS_VISIBLE | WS_BORDER | ES_NUMBER,
                      200, 20, 100, 20, g_hSettingsDialog, (HMENU)1001, hMod, NULL);
+        HWND hTimeoutUpDown = CreateWindowExA(0, UPDOWN_CLASS, "",
+                     WS_CHILD | WS_VISIBLE | UDS_AUTOBUDDY | UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_ARROWKEYS,
+                     0, 0, 0, 0, g_hSettingsDialog, NULL, hMod, hTimeoutEdit);
+        SendMessage(hTimeoutUpDown, UDM_SETRANGE, 0, MAKELPARAM(3600, 5));
 
         HWND hAudioCheck = CreateWindowA("BUTTON", "Enable Audio Detection",
                      WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
@@ -544,6 +531,7 @@ void ShowSettingsDialog() {
         if (g_hSettingsFont) {
             SendMessageA(hTimeoutLabel, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
             SendMessageA(hTimeoutEdit, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
+            SendMessageA(hTimeoutUpDown, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
             SendMessageA(hAudioCheck, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
             SendMessageA(hDebugCheck, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
             SendMessageA(hStartupCheck, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
@@ -552,8 +540,6 @@ void ShowSettingsDialog() {
             SendMessageA(hConfigBtn, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
             SendMessageA(hCloseBtn, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
         }
-
-        g_originalTimeoutEditProc = (WNDPROC)SetWindowLongPtrA(hTimeoutEdit, GWLP_WNDPROC, (LONG_PTR)TimeoutEditSubclassProc);
 
         char buffer[32];
         sprintf_s(buffer, 32, "%d", g_app.config.idleTimeout);
