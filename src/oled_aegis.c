@@ -71,11 +71,41 @@ typedef struct {
 static AppState g_app;
 
 static int g_currentMonitorIndex = 0;
+static UINT g_settingsDpi = 96;
 static HBRUSH g_blackBrush = NULL;
 static MonitorInfo g_monitors[16];
 static int g_monitorCount = 0;
 static HWND g_hSettingsDialog = NULL;
 static HFONT g_hSettingsFont = NULL;
+
+int ScaleDPI(int value) {
+    return MulDiv(value, g_settingsDpi, 96);
+}
+
+UINT GetDpiForWindowCompat(HWND hWnd) {
+    // GetDpiForWindow requires Windows 10 1607+
+    typedef UINT (WINAPI *PFN_GetDpiForWindow)(HWND);
+    static PFN_GetDpiForWindow pfnGetDpiForWindow = NULL;
+    static int checked = 0;
+
+    if (!checked) {
+        HMODULE hUser32 = GetModuleHandleW(L"user32.dll");
+        if (hUser32) {
+            pfnGetDpiForWindow = (PFN_GetDpiForWindow)GetProcAddress(hUser32, "GetDpiForWindow");
+        }
+        checked = 1;
+    }
+
+    if (pfnGetDpiForWindow && hWnd) {
+        return pfnGetDpiForWindow(hWnd);
+    }
+
+    // Fallback for older Windows versions
+    HDC hdc = GetDC(hWnd);
+    UINT dpi = GetDeviceCaps(hdc, LOGPIXELSX);
+    ReleaseDC(hWnd, hdc);
+    return dpi ? dpi : 96;
+}
 
 void GetAppDataPath(char* buffer, size_t bufferSize) {
     char appDataPath[MAX_PATH];
@@ -463,9 +493,18 @@ void ShowSettingsDialog() {
         return;
     }
 
-    NONCLIENTMETRICS ncm = {0};
-    ncm.cbSize = sizeof(NONCLIENTMETRICS);
-    SystemParametersInfoA(SPI_GETNONCLIENTMETRICS, sizeof(NONCLIENTMETRICS), &ncm, 0);
+    // Get DPI before creating the window (use primary monitor DPI)
+    HDC hdc = GetDC(NULL);
+    g_settingsDpi = GetDeviceCaps(hdc, LOGPIXELSX);
+    ReleaseDC(NULL, hdc);
+    if (g_settingsDpi == 0) g_settingsDpi = 96;
+
+    // Create DPI-scaled font
+    NONCLIENTMETRICSA ncm = {0};
+    ncm.cbSize = sizeof(NONCLIENTMETRICSA);
+    SystemParametersInfoA(SPI_GETNONCLIENTMETRICS, sizeof(NONCLIENTMETRICSA), &ncm, 0);
+    // Scale the font height for DPI
+    ncm.lfMessageFont.lfHeight = MulDiv(ncm.lfMessageFont.lfHeight, g_settingsDpi, 96);
     g_hSettingsFont = CreateFontIndirectA(&ncm.lfMessageFont);
 
     WNDCLASSA wc = {0};
@@ -478,75 +517,109 @@ void ShowSettingsDialog() {
 
     HMODULE hMod = GetModuleHandle(NULL);
     g_hSettingsDialog = CreateWindowExA(0, "OLED Aegis Settings Dialog", "OLED Aegis Settings",
-                                      // WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN,
                                       WS_POPUP | WS_CAPTION | WS_SYSMENU,
-                                      CW_USEDEFAULT, CW_USEDEFAULT, 410, 400,
+                                      CW_USEDEFAULT, CW_USEDEFAULT,
+                                      ScaleDPI(410), ScaleDPI(400),
                                       NULL, NULL, hMod, NULL);
 
     if (g_hSettingsDialog) {
         SetWindowLongPtr(g_hSettingsDialog, GWLP_WNDPROC, (LONG_PTR)SettingsDialogProc);
+
+        // Update DPI now that we have a window
+        g_settingsDpi = GetDpiForWindowCompat(g_hSettingsDialog);
 
         INITCOMMONCONTROLSEX icex;
         icex.dwSize = sizeof(INITCOMMONCONTROLSEX);
         icex.dwICC = ICC_UPDOWN_CLASS;
         InitCommonControlsEx(&icex);
 
+        // Layout constants (base values at 96 DPI)
+        int margin = ScaleDPI(20);
+        int rowHeight = ScaleDPI(25);
+        int controlHeight = ScaleDPI(20);
+        int labelWidth = ScaleDPI(180);
+        int editWidth = ScaleDPI(100);
+        int checkboxWidth = ScaleDPI(340);
+        int buttonWidth = ScaleDPI(100);
+        int configBtnWidth = ScaleDPI(130);
+        int buttonHeight = ScaleDPI(30);
+        int buttonSpacing = ScaleDPI(10);
+
+        int y = margin;
+
         HWND hTimeoutLabel = CreateWindowA("STATIC", "Idle Timeout (seconds):",
                      WS_CHILD | WS_VISIBLE,
-                     20, 20, 180, 20, g_hSettingsDialog, NULL, hMod, NULL);
+                     margin, y, labelWidth, controlHeight, g_hSettingsDialog, NULL, hMod, NULL);
         HWND hTimeoutEdit = CreateWindowExA(0, "EDIT", "",
                      WS_CHILD | WS_VISIBLE | WS_BORDER | ES_NUMBER,
-                     200, 20, 100, 20, g_hSettingsDialog, (HMENU)1001, hMod, NULL);
+                     margin + labelWidth, y, editWidth, controlHeight,
+                     g_hSettingsDialog, (HMENU)1001, hMod, NULL);
         HWND hTimeoutUpDown = CreateWindowExA(0, UPDOWN_CLASS, "",
                      WS_CHILD | WS_VISIBLE | UDS_AUTOBUDDY | UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_ARROWKEYS,
                      0, 0, 0, 0, g_hSettingsDialog, NULL, hMod, hTimeoutEdit);
         SendMessage(hTimeoutUpDown, UDM_SETRANGE, 0, MAKELPARAM(3600, 5));
+        y += rowHeight + ScaleDPI(5);
 
         HWND hAudioCheck = CreateWindowA("BUTTON", "Prevent Screen Saver During Media Playback",
                      WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                     20, 50, 260, 20, g_hSettingsDialog, (HMENU)1002, hMod, NULL);
+                     margin, y, checkboxWidth, controlHeight, g_hSettingsDialog, (HMENU)1002, hMod, NULL);
+        y += rowHeight;
+
         HWND hDebugCheck = CreateWindowA("BUTTON", "Debug Mode",
                      WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                     20, 75, 220, 20, g_hSettingsDialog, (HMENU)1003, hMod, NULL);
+                     margin, y, checkboxWidth, controlHeight, g_hSettingsDialog, (HMENU)1003, hMod, NULL);
+        y += rowHeight;
+
         HWND hStartupCheck = CreateWindowA("BUTTON", "Run at Startup",
                      WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                     20, 100, 220, 20, g_hSettingsDialog, (HMENU)1004, hMod, NULL);
+                     margin, y, checkboxWidth, controlHeight, g_hSettingsDialog, (HMENU)1004, hMod, NULL);
+        y += rowHeight + ScaleDPI(5);
 
         HWND hMonitorsLabel = CreateWindowA("STATIC", "Monitors:",
                      WS_CHILD | WS_VISIBLE,
-                     20, 130, 100, 20, g_hSettingsDialog, NULL, hMod, NULL);
+                     margin, y, ScaleDPI(100), controlHeight, g_hSettingsDialog, NULL, hMod, NULL);
+        y += rowHeight;
 
-        int y = 155;
         for (int i = 0; i < g_monitorCount; i++) {
             HWND hMonitorCheck = CreateWindowA("BUTTON", g_monitors[i].displayName,
                          WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                         20, y, 380, 20, g_hSettingsDialog, (HMENU)(INT_PTR)(2000 + i),
+                         margin, y, checkboxWidth, controlHeight,
+                         g_hSettingsDialog, (HMENU)(INT_PTR)(2000 + i),
                          hMod, NULL);
             if (g_hSettingsFont) SendMessageA(hMonitorCheck, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
-            y += 25;
+            y += rowHeight;
         }
 
-        int btnY = y + 25;
+        y += margin;
+        int btnX = margin;
         HWND hApplyBtn = CreateWindowA("BUTTON", "Apply",
                      WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                     20, btnY, 100, 30, g_hSettingsDialog, (HMENU)1005, hMod, NULL);
+                     btnX, y, buttonWidth, buttonHeight, g_hSettingsDialog, (HMENU)1005, hMod, NULL);
+        btnX += buttonWidth + buttonSpacing;
+
         HWND hConfigBtn = CreateWindowA("BUTTON", "Open Config File",
                      WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                     130, btnY, 130, 30, g_hSettingsDialog, (HMENU)1006, hMod, NULL);
+                     btnX, y, configBtnWidth, buttonHeight, g_hSettingsDialog, (HMENU)1006, hMod, NULL);
+        btnX += configBtnWidth + buttonSpacing;
+
         HWND hCloseBtn = CreateWindowA("BUTTON", "Close",
                      WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                     270, btnY, 100, 30, g_hSettingsDialog, (HMENU)1007, hMod, NULL);
+                     btnX, y, buttonWidth, buttonHeight, g_hSettingsDialog, (HMENU)1007, hMod, NULL);
 
-        int dialogWidth = 410;
-        int dialogHeight = btnY + 90;
+        // Calculate dialog size based on content
+        int dialogWidth = margin + checkboxWidth + margin + ScaleDPI(20);  // Add extra for window borders
+        int dialogHeight = y + buttonHeight + margin + ScaleDPI(40);  // Add extra for title bar
         SetWindowPos(g_hSettingsDialog, NULL, 0, 0, dialogWidth, dialogHeight,
                      SWP_NOMOVE | SWP_NOZORDER);
 
+        // Center on primary monitor
         int screenWidth = GetSystemMetrics(SM_CXSCREEN);
         int screenHeight = GetSystemMetrics(SM_CYSCREEN);
-        SetWindowPos(g_hSettingsDialog, NULL, (screenWidth - dialogWidth) / 2, (screenHeight - dialogHeight) / 2,
+        SetWindowPos(g_hSettingsDialog, NULL,
+                     (screenWidth - dialogWidth) / 2, (screenHeight - dialogHeight) / 2,
                      0, 0, SWP_NOSIZE | SWP_NOZORDER);
 
+        // Apply font to all controls
         if (g_hSettingsFont) {
             SendMessageA(hTimeoutLabel, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
             SendMessageA(hTimeoutEdit, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
@@ -560,6 +633,7 @@ void ShowSettingsDialog() {
             SendMessageA(hCloseBtn, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
         }
 
+        // Set initial values
         char buffer[32];
         sprintf_s(buffer, 32, "%d", g_app.config.idleTimeout);
         SetDlgItemTextA(g_hSettingsDialog, 1001, buffer);
