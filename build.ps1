@@ -7,7 +7,9 @@ if (!(Test-Path -Path $buildDir -PathType Container)) {
 Push-Location $buildDir
 
 $sourceFile = Join-Path $PSScriptRoot "src\oled_aegis.c"
+$resourceFile = Join-Path $PSScriptRoot "src\oled_aegis.rc"
 $outputExe = "oled_aegis.exe"
+$resourceObj = "oled_aegis.res"
 
 # Get environment variables from vcvarsall.bat
 # Cache them to a file vc_env.txt.
@@ -48,14 +50,28 @@ $buildType = if ($args.Count -gt 0) { $args[0] } else { "release" }
 
 Write-Host "Building OLED Aegis ($buildType)..." -ForegroundColor Green
 
+# Compile resources if .rc file exists
+if (Test-Path $resourceFile) {
+    Write-Host "Compiling resources..." -ForegroundColor Cyan
+    rc.exe /nologo /fo "$resourceObj" "$resourceFile"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Resource compilation failed!" -ForegroundColor Red
+        Pop-Location
+        exit $LASTEXITCODE
+    }
+}
+
+# Determine if we have resources to link
+$linkResources = if (Test-Path $resourceObj) { $resourceObj } else { "" }
+
 if ($buildType -eq "debug") {
     # Debug Compile
     Write-Host "Configuration: Debug" -ForegroundColor Yellow
-    cl.exe -FC -Zi -MDd /D "INITGUID" "$sourceFile" /Fe:"$outputExe" /link user32.lib shell32.lib ole32.lib uuid.lib gdi32.lib advapi32.lib comctl32.lib powrprof.lib
+    cl.exe -FC -Zi -MDd /D "INITGUID" "$sourceFile" /Fe:"$outputExe" /link user32.lib shell32.lib ole32.lib uuid.lib gdi32.lib advapi32.lib comctl32.lib powrprof.lib $linkResources
 } else {
     # Optimized Compile (Release)
     Write-Host "Configuration: Release (Optimized)" -ForegroundColor Yellow
-    cl.exe -O2 -FC -MD /D "INITGUID" "$sourceFile" /Fe:"$outputExe" /link user32.lib shell32.lib ole32.lib uuid.lib gdi32.lib advapi32.lib comctl32.lib powrprof.lib
+    cl.exe -O2 -FC -MD /D "INITGUID" "$sourceFile" /Fe:"$outputExe" /link user32.lib shell32.lib ole32.lib uuid.lib gdi32.lib advapi32.lib comctl32.lib powrprof.lib $linkResources
 }
 
 if ($LASTEXITCODE -eq 0) {

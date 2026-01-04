@@ -1,0 +1,8 @@
+// OLED Aegis Resource File
+// Icons embedded in executable
+
+#define IDI_ICON_ACTIVE   101
+#define IDI_ICON_INACTIVE 102
+
+IDI_ICON_ACTIVE   ICON "..\\images\\oled_aegis_active.ico"
+IDI_ICON_INACTIVE ICON "..\\images\\oled_aegis_inactive.ico"

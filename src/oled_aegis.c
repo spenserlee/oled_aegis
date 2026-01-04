@@ -16,6 +16,10 @@
 #define MAX_LOG_SIZE_BYTES (1 * 1024 * 1024)  // 1 MB log file size limit
 #define MANUAL_ACTIVATION_COOLDOWN_MS 2500
 
+// Resource IDs (must match oled_aegis.rc)
+#define IDI_ICON_ACTIVE   101
+#define IDI_ICON_INACTIVE 102
+
 typedef NTSTATUS (WINAPI *PFN_CallNtPowerInformation)(
     POWER_INFORMATION_LEVEL InformationLevel,
     PVOID InputBuffer,
@@ -118,43 +122,13 @@ void GetAppDataPath(char* buffer, size_t bufferSize) {
 }
 
 void LoadTrayIcons() {
-    // Get the directory where the executable is located
-    char exePath[MAX_PATH];
-    char iconPath[MAX_PATH];
+    HINSTANCE hInstance = GetModuleHandle(NULL);
 
-    GetModuleFileNameA(NULL, exePath, MAX_PATH);
+    // Load icons from embedded resources
+    g_hIconActive = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_ICON_ACTIVE));
+    g_hIconInactive = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_ICON_INACTIVE));
 
-    // Remove the executable name to get directory
-    char* lastSlash = strrchr(exePath, '\\');
-    if (lastSlash) {
-        *lastSlash = '\0';
-    }
-
-    // Try to load active icon from images subdirectory
-    sprintf_s(iconPath, MAX_PATH, "%s\\images\\oled_aegis_active.ico", exePath);
-    g_hIconActive = (HICON)LoadImageA(NULL, iconPath, IMAGE_ICON, 0, 0,
-                                      LR_LOADFROMFILE | LR_DEFAULTSIZE);
-
-    // If not found in images/, try same directory as exe
-    if (!g_hIconActive) {
-        sprintf_s(iconPath, MAX_PATH, "%s\\oled_aegis_active.ico", exePath);
-        g_hIconActive = (HICON)LoadImageA(NULL, iconPath, IMAGE_ICON, 0, 0,
-                                          LR_LOADFROMFILE | LR_DEFAULTSIZE);
-    }
-
-    // Try to load inactive icon from images subdirectory
-    sprintf_s(iconPath, MAX_PATH, "%s\\images\\oled_aegis_inactive.ico", exePath);
-    g_hIconInactive = (HICON)LoadImageA(NULL, iconPath, IMAGE_ICON, 0, 0,
-                                        LR_LOADFROMFILE | LR_DEFAULTSIZE);
-
-    // If not found in images/, try same directory as exe
-    if (!g_hIconInactive) {
-        sprintf_s(iconPath, MAX_PATH, "%s\\oled_aegis_inactive.ico", exePath);
-        g_hIconInactive = (HICON)LoadImageA(NULL, iconPath, IMAGE_ICON, 0, 0,
-                                            LR_LOADFROMFILE | LR_DEFAULTSIZE);
-    }
-
-    // Fall back to system icons if custom icons not found
+    // Fall back to system icons if resource icons not found
     if (!g_hIconActive) {
         g_hIconActive = LoadIcon(NULL, IDI_APPLICATION);
     }
@@ -971,15 +945,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
                 g_blackBrush = NULL;
             }
 
-            // Clean up custom icons (only if loaded from file)
-            if (g_hIconActive && g_hIconActive != LoadIcon(NULL, IDI_APPLICATION)) {
-                DestroyIcon(g_hIconActive);
-                g_hIconActive = NULL;
-            }
-            if (g_hIconInactive && g_hIconInactive != LoadIcon(NULL, IDI_INFORMATION)) {
-                DestroyIcon(g_hIconInactive);
-                g_hIconInactive = NULL;
-            }
+            // Note: Icons loaded via LoadIcon from resources don't need DestroyIcon
+            g_hIconActive = NULL;
+            g_hIconInactive = NULL;
 
             PostQuitMessage(0);
             break;
