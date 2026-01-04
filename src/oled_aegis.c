@@ -58,7 +58,7 @@ typedef struct {
     HWND monitorWindows[16];
     int monitorWindowCount;
     Config config;
-    NOTIFYICONDATA nid;
+    NOTIFYICONDATAA nid;
     int screenSaverActive;
     time_t lastInputTime;
     int isMediaPlaying;
@@ -87,7 +87,7 @@ void GetAppDataPath(char* buffer, size_t bufferSize) {
 
 void LogMessage(const char* format, ...) {
     if (!g_app.config.debugMode) return;
-    
+
     if (!g_logFile) {
         char appDataPath[MAX_PATH];
         GetAppDataPath(appDataPath, sizeof(appDataPath));
@@ -121,9 +121,9 @@ void LogMessage(const char* format, ...) {
 }
 
 BOOL CALLBACK EnumMonitorCallback(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData) {
-    MONITORINFOEX mi;
-    mi.cbSize = sizeof(MONITORINFOEX);
-    GetMonitorInfo(hMonitor, (LPMONITORINFO)&mi);
+    MONITORINFOEXA mi;
+    mi.cbSize = sizeof(MONITORINFOEXA);
+    GetMonitorInfoA(hMonitor, (LPMONITORINFO)&mi);
 
     if (g_monitorCount < 16) {
         g_monitors[g_monitorCount].hMonitor = hMonitor;
@@ -131,8 +131,8 @@ BOOL CALLBACK EnumMonitorCallback(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprc
         g_monitors[g_monitorCount].monitorIndex = g_monitorCount;
         g_monitors[g_monitorCount].isPrimary = (mi.dwFlags & MONITORINFOF_PRIMARY) != 0;
 
-        WideCharToMultiByte(CP_ACP, 0, mi.szDevice, -1,
-                           g_monitors[g_monitorCount].deviceName, 32, NULL, NULL);
+        strncpy(g_monitors[g_monitorCount].deviceName, mi.szDevice, 31);
+        g_monitors[g_monitorCount].deviceName[31] = '\0';
 
         DEVMODEA dm = {0};
         dm.dmSize = sizeof(DEVMODEA);
@@ -520,7 +520,7 @@ void ShowSettingsDialog() {
         for (int i = 0; i < g_monitorCount; i++) {
             HWND hMonitorCheck = CreateWindowA("BUTTON", g_monitors[i].displayName,
                          WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                         20, y, 380, 20, g_hSettingsDialog, (HMENU)(2000 + i),
+                         20, y, 380, 20, g_hSettingsDialog, (HMENU)(INT_PTR)(2000 + i),
                          hMod, NULL);
             if (g_hSettingsFont) SendMessageA(hMonitorCheck, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
             y += 25;
@@ -608,8 +608,8 @@ void ApplySettings(HWND hWnd) {
 void UpdateTrayIcon(int active) {
     HICON hIcon = LoadIcon(NULL, active ? IDI_APPLICATION : IDI_INFORMATION);
     g_app.nid.hIcon = hIcon;
-    lstrcpyW(g_app.nid.szTip, active ? L"OLED Aegis - Active" : L"OLED Aegis - Idle");
-    Shell_NotifyIconW(NIM_MODIFY, &g_app.nid);
+    lstrcpyA(g_app.nid.szTip, active ? "OLED Aegis - Active" : "OLED Aegis - Idle");
+    Shell_NotifyIconA(NIM_MODIFY, (PNOTIFYICONDATAA)&g_app.nid);
 }
 
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -629,14 +629,14 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
                 CloseHandle(hMutex);
             }
 
-            g_app.nid.cbSize = sizeof(NOTIFYICONDATAW);
+            g_app.nid.cbSize = sizeof(NOTIFYICONDATAA);
             g_app.nid.hWnd = hWnd;
             g_app.nid.uID = 1;
             g_app.nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
             g_app.nid.uCallbackMessage = WM_TRAYICON;
             g_app.nid.hIcon = LoadIcon(NULL, IDI_INFORMATION);
-            lstrcpyW(g_app.nid.szTip, L"OLED Aegis - Idle");
-            Shell_NotifyIconW(NIM_ADD, &g_app.nid);
+            lstrcpyA(g_app.nid.szTip, "OLED Aegis - Idle");
+            Shell_NotifyIconA(NIM_ADD, &g_app.nid);
 
             g_app.config.idleTimeout = DEFAULT_IDLE_TIMEOUT;
             g_app.config.mediaDetectionEnabled = 1;
@@ -751,7 +751,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
                 case 2:
                     LogMessage("User: Selected 'Exit' from tray menu - shutting down");
                     HideScreenSaver();
-                    Shell_NotifyIcon(NIM_DELETE, &g_app.nid);
+                    Shell_NotifyIconA(NIM_DELETE, &g_app.nid);
                     PostQuitMessage(0);
                     break;
             }
@@ -767,7 +767,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
             }
 
             HideScreenSaver();
-            Shell_NotifyIcon(NIM_DELETE, &g_app.nid);
+            Shell_NotifyIconA(NIM_DELETE, &g_app.nid);
 
             if (g_hSettingsDialog) {
                 DestroyWindow(g_hSettingsDialog);
