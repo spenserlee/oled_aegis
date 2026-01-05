@@ -28,7 +28,7 @@ You need Visual Studio installed with the C++ build tools. You can use:
    oled_aegis.exe
    ```
 
-### Option 2: Using build.ps1 (Recommended for WSL users)
+### Option 2: Using build.ps1
 
 1. Open PowerShell (can be run from WSL or Windows)
 
