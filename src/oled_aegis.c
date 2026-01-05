@@ -6,8 +6,10 @@
 #include <stdarg.h>
 #include <commctrl.h>
 #include <powerbase.h>
+#include <psapi.h>
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "powrprof.lib")
+#pragma comment(lib, "psapi.lib")
 
 #define APP_NAME L"OLED Aegis"
 #define WM_TRAYICON (WM_USER + 1)
@@ -405,6 +407,8 @@ void EnumerateMonitors() {
 }
 
 int IsMediaPlaying() {
+    static int lastMediaState = -1;
+
     if (!g_app.config.mediaDetectionEnabled) {
         return 0;
     }
@@ -433,8 +437,12 @@ int IsMediaPlaying() {
 
     if (status == 0) {
         int isPlaying = (executionState & ES_DISPLAY_REQUIRED) != 0;
-        LogMessage("Media detection: executionState=0x%08X, ES_DISPLAY_REQUIRED=%d, mediaPlaying=%d",
-                 executionState, (executionState & ES_DISPLAY_REQUIRED) != 0, isPlaying);
+        // Only log when state changes to reduce noise
+        if (isPlaying != lastMediaState) {
+            LogMessage("Media detection: state changed to %s (executionState=0x%08X)",
+                     isPlaying ? "PLAYING" : "NOT_PLAYING", executionState);
+            lastMediaState = isPlaying;
+        }
         return isPlaying;
     }
 
@@ -442,14 +450,142 @@ int IsMediaPlaying() {
     return 0;
 }
 
+// Get the process name (e.g., "explorer.exe") from a window handle
+// Returns 1 on success, 0 on failure
+int GetProcessNameFromHwnd(HWND hWnd, char* buffer, int bufferSize) {
+    if (!hWnd || !buffer || bufferSize <= 0) return 0;
+
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hWnd, &pid);
+    if (pid == 0) return 0;
+
+    HANDLE hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, FALSE, pid);
+    if (!hProcess) {
+        // Try with fewer permissions
+        hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+        if (!hProcess) return 0;
+    }
+
+    DWORD result = GetModuleBaseNameA(hProcess, NULL, buffer, bufferSize);
+    CloseHandle(hProcess);
+
+    return result > 0 ? 1 : 0;
+}
+
+// Check if a Windows shell overlay window (Start Menu, Task View, Action Center) is open
+// Returns the number of shell windows detected (0, 1, or 2 if both Start Menu and Action Center)
+int IsShellWindowOpen() {
+    HWND hFg = GetForegroundWindow();
+    if (!hFg) {
+        LogMessage("Shell detection: No foreground window");
+        return 0;
+    }
+
+    char processName[MAX_PATH] = {0};
+    if (!GetProcessNameFromHwnd(hFg, processName, sizeof(processName))) {
+        LogMessage("Shell detection: Could not get process name for foreground window");
+        return 0;
+    }
+
+    char className[256] = {0};
+    GetClassNameA(hFg, className, sizeof(className));
+
+    LogMessage("Shell detection: Foreground window - process='%s', class='%s'", processName, className);
+
+    int shellWindowCount = 0;
+
+    // Check for known shell host processes
+    // ShellExperienceHost.exe - Start Menu, Action Center on Windows 11
+    // SearchHost.exe - Windows Search/Start Menu
+    // StartMenuExperienceHost.exe - Start Menu on Windows 10
+    // ShellHost.exe - Action Center / Control Center on Windows 11
+    if (_stricmp(processName, "ShellExperienceHost.exe") == 0 ||
+        _stricmp(processName, "SearchHost.exe") == 0 ||
+        _stricmp(processName, "StartMenuExperienceHost.exe") == 0 ||
+        _stricmp(processName, "ShellHost.exe") == 0) {
+
+        LogMessage("Shell detection: Shell host process detected: %s", processName);
+        shellWindowCount = 1;
+    }
+
+    // Additional check: Task View is hosted by explorer.exe with specific window classes
+    if (_stricmp(processName, "explorer.exe") == 0) {
+        // Task View uses Windows.UI.Core.CoreWindow or XamlExplorerHostIslandWindow
+        if (strstr(className, "Windows.UI.Core.CoreWindow") != NULL ||
+            strstr(className, "XamlExplorerHostIslandWindow") != NULL) {
+
+            LogMessage("Shell detection: Explorer shell window detected: class=%s", className);
+            shellWindowCount = 1;
+        }
+    }
+
+    if (shellWindowCount == 0) {
+        LogMessage("Shell detection: No shell windows detected");
+    }
+
+    return shellWindowCount;
+}
+
+// Send Escape key(s) to close shell windows (Start Menu, Task View, Action Center)
+void CloseShellWindows(int escapeCount) {
+    LogMessage("Sending %d Escape key(s) to close shell windows", escapeCount);
+
+    for (int i = 0; i < escapeCount; i++) {
+        INPUT input[2] = {0};
+
+        // Key down
+        input[0].type = INPUT_KEYBOARD;
+        input[0].ki.wVk = VK_ESCAPE;
+        input[0].ki.dwFlags = 0;
+
+        // Key up
+        input[1].type = INPUT_KEYBOARD;
+        input[1].ki.wVk = VK_ESCAPE;
+        input[1].ki.dwFlags = KEYEVENTF_KEYUP;
+
+        UINT sent = SendInput(2, input, sizeof(INPUT));
+        LogMessage("SendInput returned %u (expected 2)", sent);
+
+        // Small delay between escape presses if sending multiple
+        if (i < escapeCount - 1) {
+            Sleep(50);
+        }
+    }
+}
+
 void ShowScreenSaver(int isManual) {
     if (g_app.screenSaverActive) return;
 
-    g_app.isManualActivation = isManual;
-    if (isManual) {
+    // Check for and close shell windows (Start Menu, Task View, Action Center)
+    // before showing the screen saver, since we cannot draw over them.
+    // We check twice because multiple shell windows can be open simultaneously
+    // (e.g., Start Menu and Action Center), and closing one may reveal another.
+    int sentEscapeKeys = 0;
+    for (int attempt = 0; attempt < 2; attempt++) {
+        int shellWindowCount = IsShellWindowOpen();
+        if (shellWindowCount > 0) {
+            LogMessage("Shell window(s) detected before screen saver activation (attempt %d), closing them", attempt + 1);
+            CloseShellWindows(1);  // Send one Escape at a time
+            Sleep(250);  // Wait for shell window animation to complete
+            sentEscapeKeys = 1;
+        } else {
+            break;  // No more shell windows, stop checking
+        }
+    }
+
+    // Use cooldown for both manual activation and when we sent Escape keys
+    // (Escape keys reset the idle timer via GetLastInputInfo, so we need
+    // to ignore the apparent "user activity" for a short period)
+    if (isManual || sentEscapeKeys) {
+        g_app.isManualActivation = 1;
         g_app.manualActivationTime = GetTickCount();
-        LogMessage("Showing screen saver (manual activation)");
+        if (isManual) {
+            LogMessage("Showing screen saver (manual activation)");
+        } else {
+            LogMessage("Showing screen saver (automatic activation, with input cooldown due to shell window closure)");
+        }
     } else {
+        g_app.isManualActivation = 0;
         g_app.manualActivationTime = 0;
         LogMessage("Showing screen saver (automatic activation)");
     }
@@ -540,8 +676,6 @@ LRESULT CALLBACK SettingsDialogProc(HWND hWnd, UINT message, WPARAM wParam, LPAR
     }
     return DefWindowProc(hWnd, message, wParam, lParam);
 }
-
-
 
 void ShowSettingsDialog() {
     if (g_hSettingsDialog) {
@@ -808,9 +942,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
             if (wParam == TIMER_IDLE_CHECK) {
                 DWORD idleTime = GetIdleTime();
                 int mediaPlaying = IsMediaPlaying();
-                if (mediaPlaying) {
-                    LogMessage("Timer: Media playback detected, preventing screen saver");
-                }
 
                 if (!mediaPlaying && idleTime > (DWORD)(g_app.config.idleTimeout * 1000)) {
                     if (!g_app.screenSaverActive) {

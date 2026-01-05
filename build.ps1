@@ -67,11 +67,11 @@ $linkResources = if (Test-Path $resourceObj) { $resourceObj } else { "" }
 if ($buildType -eq "debug") {
     # Debug Compile
     Write-Host "Configuration: Debug" -ForegroundColor Yellow
-    cl.exe -FC -Zi -MDd /D "INITGUID" "$sourceFile" /Fe:"$outputExe" /link user32.lib shell32.lib ole32.lib uuid.lib gdi32.lib advapi32.lib comctl32.lib powrprof.lib $linkResources
+    cl.exe -FC -Zi -MDd /D "INITGUID" "$sourceFile" /Fe:"$outputExe" /link user32.lib shell32.lib ole32.lib uuid.lib gdi32.lib advapi32.lib comctl32.lib powrprof.lib psapi.lib $linkResources
 } else {
     # Optimized Compile (Release)
     Write-Host "Configuration: Release (Optimized)" -ForegroundColor Yellow
-    cl.exe -O2 -FC -MD /D "INITGUID" "$sourceFile" /Fe:"$outputExe" /link user32.lib shell32.lib ole32.lib uuid.lib gdi32.lib advapi32.lib comctl32.lib powrprof.lib $linkResources
+    cl.exe -O2 -FC -MD /D "INITGUID" "$sourceFile" /Fe:"$outputExe" /link user32.lib shell32.lib ole32.lib uuid.lib gdi32.lib advapi32.lib comctl32.lib powrprof.lib psapi.lib $linkResources
 }
 
 if ($LASTEXITCODE -eq 0) {

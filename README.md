@@ -33,19 +33,15 @@ the specified monitors.
 
 ## Known Issues
 
-Since this is just a regular Windows application, it cannot draw over special
-system windows such as Start Menu, Task View, or Action center. Workaround
-tbd.
-
 **Media Detection Limitation**: The media detection feature uses system-wide Windows Power Management APIs, which cannot distinguish which specific monitor has media playing. If media is playing on ANY monitor (including those with screen saver disabled), it will prevent screen saver activation on ALL configured monitors.
 
-Potential future improvements:
+Potenial future improvements to address this:
 - Detect fullscreen windows on each monitor to enable per-monitor media awareness
 - Query window titles/processes for media players on specific monitors
 - Allow per-monitor override of media detection setting
 
-As a failsafe, I recommend still enabling the the built-in screen saver with a
-longer timeout.
+As a failsafe, consider enabling the the built-in screen saver with a longer
+timeout.
 
 ## Building
 
