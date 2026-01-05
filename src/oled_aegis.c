@@ -590,7 +590,7 @@ void ShowScreenSaver(int isManual) {
         LogMessage("Showing screen saver (automatic activation)");
     }
 
-    LogMessage("Showing screen saver on %d monitors", g_monitorCount);
+    LogMessage("%d monitors detected", g_monitorCount);
 
     g_currentMonitorIndex = 0;
     g_app.monitorWindowCount = 0;
