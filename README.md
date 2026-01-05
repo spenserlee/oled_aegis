@@ -24,7 +24,7 @@ the specified monitors.
 ## Features
 
 * **Per-Monitor Control**: Enable screen saver on specific monitors only
-* **Media Awareness**: Doesn't activate the screen saver on the target monitor if a video is playing on it
+* **Media Awareness**: Doesn't activate the screen saver if a video is playing
 * **Reliable Activation**: Consistently activates after system sleep/wake cycles
 * **Minimal Resource Usage**: Written in pure C with no external dependencies
 * **Simple Configuration**: Edit a plain text INI file or use the system tray menu
@@ -51,7 +51,7 @@ longer timeout.
 
 Requires Visual Studio (2015 or later) with the C++ build tools installed.
 
-### Windows (Developer Command Prompt)
+### Windows (Command Prompt)
 ```batch
 build.bat
 ```
