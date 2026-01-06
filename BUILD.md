@@ -68,7 +68,11 @@ You need Visual Studio installed with the C++ build tools. You can use:
 
 #### Note on WSL development
 
-WSL is nice but obviously not an ideal Windows application development
+I don't really like Visual Studio and prefer my nvim/tmux development
+environment carried over from Linux. For Windows apps, I recommend
+[raddbg](https://github.com/EpicGamesExt/raddebugger) for debugging.
+
+While WSL is great, it's obviously not an ideal Windows application development
 environment. To workaround LSP errors (e.g. missing "windows.h"), one can
 install `cargo-xwin` to obtain the necessary Windows SDK components:
 

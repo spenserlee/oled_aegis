@@ -5,7 +5,7 @@ A lightweight, reliable screen saver for Windows.
 ## Why I made this
 
 Recently, I purchased my first OLED monitor and discovered that Windows 11
-built-in screen saver had some issues:
+built-in screen saver has some issues:
 
 * Randomly not activating after putting the computer to sleep.
 * Breaks Bluetooth pause/play interactions when the screen saver is active.
@@ -16,8 +16,8 @@ built-in screen saver had some issues:
 Solution: make my own screen saver app and give it a bad name.
 
 OLED Aegis solves these problems by implementing a screen saver app in the
-simplest way possible - draw a black window after a period of user inactivity on
-the specified monitors.
+simplest way possible: draw a black fullscreen window after a period of user
+inactivity on the specified monitors.
 
 > **Note**: It should work just fine on Windows 10, but I only tested it on Windows 11.
 
@@ -30,18 +30,6 @@ the specified monitors.
 * **Simple Configuration**: Edit a plain text INI file or use the system tray menu
 * **System Tray Integration**: Taskbar icon for easy control
 * **Startup Support**: Automatically run when Windows starts
-
-## Known Issues
-
-**Media Detection Limitation**: The media detection feature uses system-wide Windows Power Management APIs, which cannot distinguish which specific monitor has media playing. If media is playing on ANY monitor (including those with screen saver disabled), it will prevent screen saver activation on ALL configured monitors.
-
-Potenial future improvements to address this:
-- Detect fullscreen windows on each monitor to enable per-monitor media awareness
-- Query window titles/processes for media players on specific monitors
-- Allow per-monitor override of media detection setting
-
-As a failsafe, consider enabling the the built-in screen saver with a longer
-timeout.
 
 ## Building
 
@@ -67,7 +55,7 @@ build.bat
 cl.exe src\oled_aegis.c /Fe:oled_aegis.exe /O2 /MD /link user32.lib shell32.lib ole32.lib uuid.lib gdi32.lib advapi32.lib comctl32.lib powrprof.lib
 ```
 
-See [BUILD.md](BUILD.md) for detailed build instructions and troubleshooting.
+See [BUILD.md](BUILD.md) for more information.
 
 ## Configuration
 
@@ -110,14 +98,21 @@ The screen saver will automatically deactivate when:
 1. Any user input is detected
 2. Media starts playing (if `mediaDetectionEnabled=1`)
 
+### Known Issues
+
+**Media Detection Limitation**: The media detection feature uses system-wide Windows Power Management APIs, which cannot distinguish which specific monitor has media playing. If media is playing on ANY monitor (including those with screen saver disabled), it will prevent screen saver activation on ALL configured monitors.
+
+Potenial future improvements to address this:
+- Detect fullscreen windows on each monitor to enable per-monitor media awareness
+- Query window titles/processes for media players on specific monitors
+- Allow per-monitor override of media detection setting
+
+
 ## Why didn't you just make a custom Screen Saver (`.scr`)?
 
-Installing a custom `.scr` program indeed would resolve issues like not drawing
-over the Start Menu / Task View.
-
-However, from my testing, it is not possible to have a real Windows screensaver
-(`.scr` launched by the OS) affect only one monitor while leaving the others
-showing their normal desktop / video playback.
+From my testing, it is not possible to have a real Windows screensaver (`.scr`
+launched by the OS) affect only one monitor while leaving the others showing
+their normal desktop / video playback.
 
 Even if a `.scr` program specifically draws on only one monitor, when Windows
 activates a screensaver due to timeout, Explorer switches into a screensaver

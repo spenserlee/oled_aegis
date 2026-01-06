@@ -52,6 +52,7 @@ typedef struct {
 
 typedef struct {
     int idleTimeout;
+    int checkInterval;
     int mediaDetectionEnabled;
     int monitorsEnabled[16];
     int monitorCount;
@@ -335,6 +336,8 @@ void LoadConfig() {
             if (sscanf(line, "%63[^=]=%63s", key, value) == 2) {
                 if (strcmp(key, "idleTimeout") == 0) {
                     g_app.config.idleTimeout = atoi(value);
+                } else if (strcmp(key, "checkInterval") == 0) {
+                    g_app.config.checkInterval = atoi(value);
                 } else if (strcmp(key, "audioDetectionEnabled") == 0) {
                     g_app.config.mediaDetectionEnabled = atoi(value);
                 } else if (strcmp(key, "mediaDetectionEnabled") == 0) {
@@ -364,6 +367,7 @@ void SaveConfig() {
     FILE* f = fopen(configPath, "w");
     if (f) {
         fprintf(f, "idleTimeout=%d\n", g_app.config.idleTimeout);
+        fprintf(f, "checkInterval=%d\n", g_app.config.checkInterval);
         fprintf(f, "mediaDetectionEnabled=%d\n", g_app.config.mediaDetectionEnabled);
         fprintf(f, "startupEnabled=%d\n", g_app.config.startupEnabled);
         fprintf(f, "debugMode=%d\n", g_app.config.debugMode);
@@ -710,7 +714,7 @@ void ShowSettingsDialog() {
     g_hSettingsDialog = CreateWindowExA(0, "OLED Aegis Settings Dialog", "OLED Aegis Settings",
                                       WS_POPUP | WS_CAPTION | WS_SYSMENU,
                                       CW_USEDEFAULT, CW_USEDEFAULT,
-                                      ScaleDPI(410), ScaleDPI(400),
+                                      ScaleDPI(410), ScaleDPI(430),
                                       NULL, NULL, hMod, NULL);
 
     if (g_hSettingsDialog) {
@@ -749,6 +753,19 @@ void ShowSettingsDialog() {
                      WS_CHILD | WS_VISIBLE | UDS_AUTOBUDDY | UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_ARROWKEYS,
                      0, 0, 0, 0, g_hSettingsDialog, NULL, hMod, hTimeoutEdit);
         SendMessage(hTimeoutUpDown, UDM_SETRANGE, 0, MAKELPARAM(3600, 5));
+        y += rowHeight + ScaleDPI(5);
+
+        HWND hIntervalLabel = CreateWindowA("STATIC", "Check Interval (ms):",
+                     WS_CHILD | WS_VISIBLE,
+                     margin, y, labelWidth, controlHeight, g_hSettingsDialog, NULL, hMod, NULL);
+        HWND hIntervalEdit = CreateWindowExA(0, "EDIT", "",
+                     WS_CHILD | WS_VISIBLE | WS_BORDER | ES_NUMBER,
+                     margin + labelWidth, y, editWidth, controlHeight,
+                     g_hSettingsDialog, (HMENU)1008, hMod, NULL);
+        HWND hIntervalUpDown = CreateWindowExA(0, UPDOWN_CLASS, "",
+                     WS_CHILD | WS_VISIBLE | UDS_AUTOBUDDY | UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_ARROWKEYS,
+                     0, 0, 0, 0, g_hSettingsDialog, NULL, hMod, hIntervalEdit);
+        SendMessage(hIntervalUpDown, UDM_SETRANGE, 0, MAKELPARAM(10000, 250));
         y += rowHeight + ScaleDPI(5);
 
         HWND hAudioCheck = CreateWindowA("BUTTON", "Prevent Screen Saver During Media Playback",
@@ -799,7 +816,7 @@ void ShowSettingsDialog() {
 
         // Calculate dialog size based on content
         int dialogWidth = margin + checkboxWidth + margin + ScaleDPI(20);  // Add extra for window borders
-        int dialogHeight = y + buttonHeight + margin + ScaleDPI(40);  // Add extra for title bar
+        int dialogHeight = y + buttonHeight + margin + ScaleDPI(50);  // Add extra for title bar and new control
         SetWindowPos(g_hSettingsDialog, NULL, 0, 0, dialogWidth, dialogHeight,
                      SWP_NOMOVE | SWP_NOZORDER);
 
@@ -815,6 +832,9 @@ void ShowSettingsDialog() {
             SendMessageA(hTimeoutLabel, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
             SendMessageA(hTimeoutEdit, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
             SendMessageA(hTimeoutUpDown, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
+            SendMessageA(hIntervalLabel, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
+            SendMessageA(hIntervalEdit, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
+            SendMessageA(hIntervalUpDown, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
             SendMessageA(hAudioCheck, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
             SendMessageA(hDebugCheck, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
             SendMessageA(hStartupCheck, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
@@ -828,6 +848,9 @@ void ShowSettingsDialog() {
         char buffer[32];
         sprintf_s(buffer, 32, "%d", g_app.config.idleTimeout);
         SetDlgItemTextA(g_hSettingsDialog, 1001, buffer);
+
+        sprintf_s(buffer, 32, "%d", g_app.config.checkInterval);
+        SetDlgItemTextA(g_hSettingsDialog, 1008, buffer);
 
         CheckDlgButton(g_hSettingsDialog, 1002, g_app.config.mediaDetectionEnabled ? BST_CHECKED : BST_UNCHECKED);
         CheckDlgButton(g_hSettingsDialog, 1003, g_app.config.debugMode ? BST_CHECKED : BST_UNCHECKED);
@@ -848,6 +871,13 @@ void ApplySettings(HWND hWnd) {
     int oldTimeout = g_app.config.idleTimeout;
     g_app.config.idleTimeout = atoi(buffer);
 
+    GetDlgItemTextA(hWnd, 1008, buffer, 32);
+    int oldInterval = g_app.config.checkInterval;
+    int newInterval = atoi(buffer);
+    if (newInterval < 250) newInterval = 250;
+    if (newInterval > 10000) newInterval = 10000;
+    g_app.config.checkInterval = newInterval;
+
     int oldMedia = g_app.config.mediaDetectionEnabled;
     int oldDebug = g_app.config.debugMode;
     int oldStartup = g_app.config.startupEnabled;
@@ -863,11 +893,21 @@ void ApplySettings(HWND hWnd) {
     SaveConfig();
     UpdateStartupRegistry();
 
-    LogMessage("Settings applied: timeout %ds->%ds, media %d->%d, debug %d->%d, startup %d->%d",
+    LogMessage("Settings applied: timeout %ds->%ds, interval %dms->%dms, media %d->%d, debug %d->%d, startup %d->%d",
              oldTimeout, g_app.config.idleTimeout,
+             oldInterval, g_app.config.checkInterval,
              oldMedia, g_app.config.mediaDetectionEnabled,
              oldDebug, g_app.config.debugMode,
              oldStartup, g_app.config.startupEnabled);
+
+    if (oldInterval != g_app.config.checkInterval) {
+        KillTimer(g_app.hWnd, TIMER_IDLE_CHECK);
+        SetTimer(g_app.hWnd, TIMER_IDLE_CHECK, g_app.config.checkInterval, NULL);
+        LogMessage("Timer recreated with new interval: %dms", g_app.config.checkInterval);
+    }
+
+    sprintf_s(buffer, 32, "%d", g_app.config.checkInterval);
+    SetDlgItemTextA(hWnd, 1008, buffer);
 }
 
 void UpdateTrayIcon(int active) {
@@ -905,6 +945,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
             Shell_NotifyIconA(NIM_ADD, &g_app.nid);
 
             g_app.config.idleTimeout = DEFAULT_IDLE_TIMEOUT;
+            g_app.config.checkInterval = 1000;
             g_app.config.mediaDetectionEnabled = 1;
             g_app.config.startupEnabled = 0;
             g_app.config.debugMode = 0;
@@ -934,7 +975,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
             wc.lpszClassName = L"OLEDAegisScreen";
             RegisterClassW(&wc);
 
-            SetTimer(hWnd, TIMER_IDLE_CHECK, 500, NULL);
+            SetTimer(hWnd, TIMER_IDLE_CHECK, g_app.config.checkInterval, NULL);
 
             break;
 
