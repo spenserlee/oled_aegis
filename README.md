@@ -31,6 +31,12 @@ inactivity on the specified monitors.
 * **System Tray Integration**: Taskbar icon for easy control
 * **Startup Support**: Automatically run when Windows starts
 
+## Download & Installation
+
+Download the latest `oled_aegis.exe` from the [Releases page](https://github.com/spenserlee/oled_aegis/releases). No installation required - simply run the executable.
+
+For convenient access, you can place it in any folder and create a shortcut, or add it to your Windows startup folder.
+
 ## Building
 
 Requires Visual Studio (2015 or later) with the C++ build tools installed.
@@ -59,12 +65,14 @@ See [BUILD.md](BUILD.md) for more information.
 
 ## Configuration
 
-Configuration is stored in `%APPDATA%\oled_aegis.ini`. This file is created automatically on first run. Edit it to customize behavior:
+Configuration is stored in `%APPDATA%\OLED_Aegis\oled_aegis.ini`. This file is created automatically on first run. Edit it to customize behavior:
 
 ```ini
 idleTimeout=300
+checkInterval=1000
 mediaDetectionEnabled=1
 startupEnabled=0
+debugMode=0
 monitor0=1
 monitor1=1
 monitor2=1
@@ -73,8 +81,10 @@ monitor2=1
 ### Settings
 
 * **idleTimeout**: Seconds of inactivity before screen saver activates (default: 300 seconds = 5 minutes)
+* **checkInterval**: Milliseconds between idle time checks (default: 1000ms, min: 250ms, max: 10000ms)
 * **mediaDetectionEnabled**: Set to `1` to prevent screen saver during media playback, `0` to disable (default: 1)
 * **startupEnabled**: Set to `1` to run at Windows startup, `0` to disable (default: 0)
+* **debugMode**: Set to `1` to enable debug logging to `%APPDATA%\OLED_Aegis\oled_aegis_debug.log`, `0` to disable (default: 0). **Note:** Enable only if troubleshooting issues, as continuous file I/O every `checkInterval` milliseconds may impact performance of other applications.
 * **monitorN**: Set to `1` to enable screen saver on monitor N, `0` to disable (default: 1 for all)
 
 ## Usage
