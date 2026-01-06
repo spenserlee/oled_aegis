@@ -22,14 +22,6 @@
 #define IDI_ICON_ACTIVE   101
 #define IDI_ICON_INACTIVE 102
 
-typedef NTSTATUS (WINAPI *PFN_CallNtPowerInformation)(
-    POWER_INFORMATION_LEVEL InformationLevel,
-    PVOID InputBuffer,
-    ULONG InputBufferLength,
-    PVOID OutputBuffer,
-    ULONG OutputBufferLength
-);
-
 static char g_logFilePath[MAX_PATH];
 static FILE* g_logFile = NULL;
 
@@ -417,23 +409,8 @@ int IsMediaPlaying() {
         return 0;
     }
 
-    static HMODULE hPowrProf = NULL;
-    static PFN_CallNtPowerInformation pfnCallNtPowerInformation = NULL;
-
-    if (!hPowrProf) {
-        hPowrProf = LoadLibraryW(L"powrprof.dll");
-    }
-
-    if (hPowrProf && !pfnCallNtPowerInformation) {
-        pfnCallNtPowerInformation = (PFN_CallNtPowerInformation)GetProcAddress(hPowrProf, "CallNtPowerInformation");
-    }
-
-    if (!pfnCallNtPowerInformation) {
-        return 0;
-    }
-
     ULONG executionState = 0;
-    NTSTATUS status = pfnCallNtPowerInformation(
+    NTSTATUS status = CallNtPowerInformation(
         SystemExecutionState,
         NULL, 0,
         &executionState, sizeof(executionState)
