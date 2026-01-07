@@ -24,6 +24,8 @@
 
 static char g_logFilePath[MAX_PATH];
 static FILE* g_logFile = NULL;
+static char g_appDataPath[MAX_PATH];
+static int g_appDataPathInitialized = 0;
 
 void ApplySettings(HWND hWnd);
 LRESULT CALLBACK SettingsDialogProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
@@ -109,11 +111,14 @@ UINT GetDpiForWindowCompat(HWND hWnd) {
 }
 
 void GetAppDataPath(char* buffer, size_t bufferSize) {
-    char appDataPath[MAX_PATH];
-    SHGetFolderPathA(NULL, CSIDL_APPDATA, NULL, 0, appDataPath);
-    sprintf_s(buffer, bufferSize, "%s\\OLED_Aegis", appDataPath);
+    if (!g_appDataPathInitialized) {
+        SHGetFolderPathA(NULL, CSIDL_APPDATA, NULL, 0, g_appDataPath);
+        sprintf_s(g_appDataPath, sizeof(g_appDataPath), "%s\\OLED_Aegis", g_appDataPath);
+        CreateDirectoryA(g_appDataPath, NULL);
+        g_appDataPathInitialized = 1;
+    }
 
-    CreateDirectoryA(buffer, NULL);
+    strncpy_s(buffer, bufferSize, g_appDataPath, _TRUNCATE);
 }
 
 void LoadTrayIcons() {
