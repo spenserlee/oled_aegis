@@ -62,7 +62,6 @@ typedef struct {
     NOTIFYICONDATAA nid;
     int screenSaverActive;
     time_t lastInputTime;
-    int isMediaPlaying;
     int isShuttingDown;
     int cursorHidden;
     DWORD manualActivationTime;
@@ -80,6 +79,7 @@ static HWND g_hSettingsDialog = NULL;
 static HFONT g_hSettingsFont = NULL;
 static HICON g_hIconActive = NULL;
 static HICON g_hIconInactive = NULL;
+static HWND g_hTooltipControl = NULL;
 
 int ScaleDPI(int value) {
     return MulDiv(value, g_settingsDpi, 96);
@@ -663,6 +663,18 @@ LRESULT CALLBACK SettingsDialogProc(HWND hWnd, UINT message, WPARAM wParam, LPAR
     return DefWindowProc(hWnd, message, wParam, lParam);
 }
 
+void AddTooltip(HWND hParent, HWND hControl, const char* text) {
+    TOOLINFOA ti = {0};
+    ti.cbSize = sizeof(TOOLINFOA);
+    ti.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+    ti.hwnd = hParent;
+    ti.uId = (UINT_PTR)hControl;
+    ti.hinst = GetModuleHandle(NULL);
+    ti.lpszText = (LPSTR)text;
+
+    SendMessageA(g_hTooltipControl, TTM_ADDTOOLA, 0, (LPARAM)&ti);
+}
+
 void ShowSettingsDialog() {
     if (g_hSettingsDialog) {
         SetForegroundWindow(g_hSettingsDialog);
@@ -682,6 +694,13 @@ void ShowSettingsDialog() {
     // Scale the font height for DPI
     ncm.lfMessageFont.lfHeight = MulDiv(ncm.lfMessageFont.lfHeight, g_settingsDpi, 96);
     g_hSettingsFont = CreateFontIndirectA(&ncm.lfMessageFont);
+
+    HWND hTooltip = CreateWindowExA(0, TOOLTIPS_CLASSA, NULL,
+                               WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
+                               CW_USEDEFAULT, CW_USEDEFAULT,
+                               CW_USEDEFAULT, CW_USEDEFAULT,
+                               g_hSettingsDialog, NULL, GetModuleHandle(NULL), NULL);
+    g_hTooltipControl = hTooltip;
 
     WNDCLASSA wc = {0};
     wc.lpfnWndProc = DefWindowProc;
@@ -750,7 +769,7 @@ void ShowSettingsDialog() {
         SendMessage(hIntervalUpDown, UDM_SETRANGE, 0, MAKELPARAM(10000, 250));
         y += rowHeight + ScaleDPI(5);
 
-        HWND hAudioCheck = CreateWindowA("BUTTON", "Prevent Screen Saver During Media Playback",
+        HWND hVideoCheck = CreateWindowA("BUTTON", "Prevent Screen Saver During Media Playback",
                      WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
                      margin, y, checkboxWidth, controlHeight, g_hSettingsDialog, (HMENU)1002, hMod, NULL);
         y += rowHeight;
@@ -817,7 +836,7 @@ void ShowSettingsDialog() {
             SendMessageA(hIntervalLabel, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
             SendMessageA(hIntervalEdit, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
             SendMessageA(hIntervalUpDown, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
-            SendMessageA(hAudioCheck, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
+            SendMessageA(hVideoCheck, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
             SendMessageA(hDebugCheck, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
             SendMessageA(hStartupCheck, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
             SendMessageA(hMonitorsLabel, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
@@ -825,6 +844,18 @@ void ShowSettingsDialog() {
             SendMessageA(hConfigBtn, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
             SendMessageA(hCloseBtn, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
         }
+
+        // Add tooltips
+        AddTooltip(g_hSettingsDialog, hTimeoutEdit,
+                   "Idle timeout in seconds before the screen saver activates.");
+        AddTooltip(g_hSettingsDialog, hIntervalEdit,
+                   "How often to poll for user activity. (250-10000ms).");
+        AddTooltip(g_hSettingsDialog, hVideoCheck,
+                   "Prevent screen saver activation during video playback.");
+        AddTooltip(g_hSettingsDialog, hDebugCheck,
+                   "Enable debug logging to %APPDATA%\\OLED_Aegis\\oled_aegis_debug.log");
+        AddTooltip(g_hSettingsDialog, hStartupCheck,
+                   "Automatically start OLED Aegis when you log into Windows.");
 
         // Set initial values
         char buffer[32];
