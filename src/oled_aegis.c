@@ -23,6 +23,42 @@
 #define IDI_ICON_ACTIVE   101
 #define IDI_ICON_INACTIVE 102
 
+// Settings dialog control IDs
+#define IDC_TIMEOUT_EDIT        1001
+#define IDC_MEDIA_CHECK         1002
+#define IDC_DEBUG_CHECK         1003
+#define IDC_STARTUP_CHECK       1004
+#define IDC_APPLY_BTN           1005
+#define IDC_CONFIG_BTN          1006
+#define IDC_CLOSE_BTN           1007
+#define IDC_INTERVAL_EDIT       1008
+#define IDC_PERMONITOR_CHECK    1009
+#define IDC_MONITOR_BASE        2000  // Monitor checkboxes: IDC_MONITOR_BASE + index
+
+// Tray context menu command IDs
+#define IDM_SETTINGS            1
+#define IDM_EXIT                2
+
+// Timing constants
+#define INPUT_IGNORE_DELAY_MS       500     // Delay after screen saver window creation to ignore input
+#define IDLE_ACTIVITY_THRESHOLD_MS  1000    // Time threshold to consider user active (1 second)
+#define IDLE_DEACTIVATE_THRESHOLD_MS 2000   // Time threshold to deactivate screen saver after input
+#define IDLE_DEACTIVATE_THRESHOLD_SEC 2     // Time threshold in seconds (for per-monitor mode)
+#define SHELL_CLOSE_DELAY_MS        250     // Delay after sending Escape to close shell windows
+#define SHELL_CLOSE_MAX_ATTEMPTS    2       // Maximum attempts to close shell windows
+
+// Check interval bounds (milliseconds)
+#define MIN_CHECK_INTERVAL_MS   250
+#define MAX_CHECK_INTERVAL_MS   10000
+
+// Idle timeout bounds (seconds)
+#define MIN_IDLE_TIMEOUT_SEC    5
+#define MAX_IDLE_TIMEOUT_SEC    3600
+
+// Device name prefix for display devices (e.g., "\\.\DISPLAY1")
+#define DEVICE_NAME_PREFIX      "\\\\.\\"
+#define DEVICE_NAME_PREFIX_LEN  4
+
 static char g_logFilePath[MAX_PATH];
 static FILE* g_logFile = NULL;
 static char g_appDataPath[MAX_PATH];
@@ -37,12 +73,13 @@ void HideScreenSaverOnMonitor(int monitorIndex);
 int IsAnyMonitorActive();
 void UpdateTrayIcon(int active);
 int FindMonitorByDeviceName(const char* deviceName);
+int IsAnyMonitorEnabled();
 
 typedef struct {
     HMONITOR hMonitor;
     RECT rect;
     int monitorIndex;
-    char deviceName[32];
+    char deviceName[CCHDEVICENAME];
     char displayName[64];
     int isPrimary;
     int width;
@@ -79,6 +116,7 @@ typedef struct {
 } AppState;
 
 static AppState g_app;
+static HANDLE g_hInstanceMutex = NULL;  // Single-instance mutex (kept for app lifetime)
 
 static UINT g_settingsDpi = 96;
 static HBRUSH g_blackBrush = NULL;
@@ -228,7 +266,7 @@ BOOL CALLBACK EnumMonitorCallback(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprc
         g_monitors[g_monitorCount].monitorIndex = g_monitorCount;
         g_monitors[g_monitorCount].isPrimary = (mi.dwFlags & MONITORINFOF_PRIMARY) != 0;
 
-        strncpy(g_monitors[g_monitorCount].deviceName, mi.szDevice, 31);
+        strncpy(g_monitors[g_monitorCount].deviceName, mi.szDevice, CCHDEVICENAME);
         g_monitors[g_monitorCount].deviceName[31] = '\0';
 
         DEVMODEA dm = {0};
@@ -243,8 +281,8 @@ BOOL CALLBACK EnumMonitorCallback(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprc
 
         // Format display name with device name (strip \\.\  prefix if present)
         const char* displayDeviceName = g_monitors[g_monitorCount].deviceName;
-        if (strncmp(displayDeviceName, "\\\\.\\", 4) == 0) {
-            displayDeviceName += 4;
+        if (strncmp(displayDeviceName, DEVICE_NAME_PREFIX, DEVICE_NAME_PREFIX_LEN) == 0) {
+            displayDeviceName += DEVICE_NAME_PREFIX_LEN;
         }
         snprintf(g_monitors[g_monitorCount].displayName, 64,
                 "%s (%dx%d)%s",
@@ -264,7 +302,7 @@ LRESULT CALLBACK MonitorWindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARA
 
     switch (message) {
         case WM_CREATE:
-            ignoreInputUntil = GetTickCount() + 500;
+            ignoreInputUntil = GetTickCount() + INPUT_IGNORE_DELAY_MS;
             break;
         case WM_PAINT:
         {
@@ -469,6 +507,15 @@ int IsAnyMonitorActive() {
     return 0;
 }
 
+int IsAnyMonitorEnabled() {
+    for (int i = 0; i < g_monitorCount; i++) {
+        if (g_monitorStates[i].enabled) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int FindMonitorByDeviceName(const char* deviceName) {
     for (int i = 0; i < g_monitorCount; i++) {
         if (strcmp(g_monitors[i].deviceName, deviceName) == 0) {
@@ -643,12 +690,12 @@ void ShowScreenSaverOnMonitor(int monitorIndex, int isManual) {
 
         if (wasInactiveCount == 1) {
             int sentEscapeKeys = 0;
-            for (int attempt = 0; attempt < 2; attempt++) {
+            for (int attempt = 0; attempt < SHELL_CLOSE_MAX_ATTEMPTS; attempt++) {
                 int shellWindowCount = IsShellWindowOpen();
                 if (shellWindowCount > 0) {
                     LogMessage("Shell window(s) detected before last monitor activation (attempt %d), closing them", attempt + 1);
                     CloseShellWindows(1);
-                    Sleep(250);
+                    Sleep(SHELL_CLOSE_DELAY_MS);
                     sentEscapeKeys = 1;
                 } else {
                     break;
@@ -663,12 +710,12 @@ void ShowScreenSaverOnMonitor(int monitorIndex, int isManual) {
         }
     } else {
         int sentEscapeKeys = 0;
-        for (int attempt = 0; attempt < 2; attempt++) {
+        for (int attempt = 0; attempt < SHELL_CLOSE_MAX_ATTEMPTS; attempt++) {
             int shellWindowCount = IsShellWindowOpen();
             if (shellWindowCount > 0) {
                 LogMessage("Shell window(s) detected before screen saver activation (attempt %d), closing them", attempt + 1);
                 CloseShellWindows(1);
-                Sleep(250);
+                Sleep(SHELL_CLOSE_DELAY_MS);
                 sentEscapeKeys = 1;
             } else {
                 break;
@@ -729,12 +776,12 @@ void ShowScreenSaver(int isManual) {
 
     if (!g_app.config.perMonitorInputDetection) {
         int sentEscapeKeys = 0;
-        for (int attempt = 0; attempt < 2; attempt++) {
+        for (int attempt = 0; attempt < SHELL_CLOSE_MAX_ATTEMPTS; attempt++) {
             int shellWindowCount = IsShellWindowOpen();
             if (shellWindowCount > 0) {
                 LogMessage("Shell window(s) detected before screen saver activation (attempt %d), closing them", attempt + 1);
                 CloseShellWindows(1);
-                Sleep(250);
+                Sleep(SHELL_CLOSE_DELAY_MS);
                 sentEscapeKeys = 1;
             } else {
                 break;
@@ -811,14 +858,14 @@ LRESULT CALLBACK SettingsDialogProc(HWND hWnd, UINT message, WPARAM wParam, LPAR
         {
             int wmId = LOWORD(wParam);
             switch (wmId) {
-                case 1005:
+                case IDC_APPLY_BTN:
                     ApplySettings(hWnd);
                     break;
-                case 1006:
+                case IDC_CONFIG_BTN:
                     LogMessage("Settings: Opening config file location");
                     OpenConfigFileLocation();
                     break;
-                case 1007:
+                case IDC_CLOSE_BTN:
                     LogMessage("Settings: Dialog closed via 'Close' button");
                     DestroyWindow(hWnd);
                     g_hSettingsDialog = NULL;
@@ -927,11 +974,11 @@ void ShowSettingsDialog() {
         HWND hTimeoutEdit = CreateWindowExA(0, "EDIT", "",
                      WS_CHILD | WS_VISIBLE | WS_BORDER | ES_NUMBER,
                      margin + labelWidth, y, editWidth, controlHeight,
-                     g_hSettingsDialog, (HMENU)1001, hMod, NULL);
+                     g_hSettingsDialog, (HMENU)IDC_TIMEOUT_EDIT, hMod, NULL);
         HWND hTimeoutUpDown = CreateWindowExA(0, UPDOWN_CLASS, "",
                      WS_CHILD | WS_VISIBLE | UDS_AUTOBUDDY | UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_ARROWKEYS,
                      0, 0, 0, 0, g_hSettingsDialog, NULL, hMod, hTimeoutEdit);
-        SendMessage(hTimeoutUpDown, UDM_SETRANGE, 0, MAKELPARAM(3600, 5));
+        SendMessage(hTimeoutUpDown, UDM_SETRANGE, 0, MAKELPARAM(MAX_IDLE_TIMEOUT_SEC, MIN_IDLE_TIMEOUT_SEC));
         y += rowHeight + ScaleDPI(5);
 
         HWND hIntervalLabel = CreateWindowA("STATIC", "Check Interval (ms):",
@@ -940,31 +987,31 @@ void ShowSettingsDialog() {
         HWND hIntervalEdit = CreateWindowExA(0, "EDIT", "",
                      WS_CHILD | WS_VISIBLE | WS_BORDER | ES_NUMBER,
                      margin + labelWidth, y, editWidth, controlHeight,
-                     g_hSettingsDialog, (HMENU)1008, hMod, NULL);
+                     g_hSettingsDialog, (HMENU)IDC_INTERVAL_EDIT, hMod, NULL);
         HWND hIntervalUpDown = CreateWindowExA(0, UPDOWN_CLASS, "",
                      WS_CHILD | WS_VISIBLE | UDS_AUTOBUDDY | UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_ARROWKEYS,
                      0, 0, 0, 0, g_hSettingsDialog, NULL, hMod, hIntervalEdit);
-        SendMessage(hIntervalUpDown, UDM_SETRANGE, 0, MAKELPARAM(10000, 250));
+        SendMessage(hIntervalUpDown, UDM_SETRANGE, 0, MAKELPARAM(MAX_CHECK_INTERVAL_MS, MIN_CHECK_INTERVAL_MS));
         y += rowHeight + ScaleDPI(5);
 
         HWND hVideoCheck = CreateWindowA("BUTTON", "Prevent Screen Saver During Media Playback",
                      WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                     margin, y, checkboxWidth, controlHeight, g_hSettingsDialog, (HMENU)1002, hMod, NULL);
+                     margin, y, checkboxWidth, controlHeight, g_hSettingsDialog, (HMENU)IDC_MEDIA_CHECK, hMod, NULL);
         y += rowHeight;
 
         HWND hDebugCheck = CreateWindowA("BUTTON", "Debug Mode",
                      WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                     margin, y, checkboxWidth, controlHeight, g_hSettingsDialog, (HMENU)1003, hMod, NULL);
+                     margin, y, checkboxWidth, controlHeight, g_hSettingsDialog, (HMENU)IDC_DEBUG_CHECK, hMod, NULL);
         y += rowHeight;
 
         HWND hStartupCheck = CreateWindowA("BUTTON", "Run at Startup",
                      WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                     margin, y, checkboxWidth, controlHeight, g_hSettingsDialog, (HMENU)1004, hMod, NULL);
+                     margin, y, checkboxWidth, controlHeight, g_hSettingsDialog, (HMENU)IDC_STARTUP_CHECK, hMod, NULL);
         y += rowHeight + ScaleDPI(5);
 
         HWND hPerMonitorCheck = CreateWindowA("BUTTON", "Per-Monitor Input Detection",
                      WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                     margin, y, checkboxWidth, controlHeight, g_hSettingsDialog, (HMENU)1009, hMod, NULL);
+                     margin, y, checkboxWidth, controlHeight, g_hSettingsDialog, (HMENU)IDC_PERMONITOR_CHECK, hMod, NULL);
         y += rowHeight + ScaleDPI(5);
 
         HWND hMonitorsLabel = CreateWindowA("STATIC", "Monitors:",
@@ -976,7 +1023,7 @@ void ShowSettingsDialog() {
             HWND hMonitorCheck = CreateWindowA("BUTTON", g_monitors[i].displayName,
                          WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
                          margin, y, checkboxWidth, controlHeight,
-                         g_hSettingsDialog, (HMENU)(INT_PTR)(2000 + i),
+                         g_hSettingsDialog, (HMENU)(INT_PTR)(IDC_MONITOR_BASE + i),
                          hMod, NULL);
             if (g_hSettingsFont) SendMessageA(hMonitorCheck, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
             y += rowHeight;
@@ -986,17 +1033,17 @@ void ShowSettingsDialog() {
         int btnX = margin;
         HWND hApplyBtn = CreateWindowA("BUTTON", "Apply",
                      WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                     btnX, y, buttonWidth, buttonHeight, g_hSettingsDialog, (HMENU)1005, hMod, NULL);
+                     btnX, y, buttonWidth, buttonHeight, g_hSettingsDialog, (HMENU)IDC_APPLY_BTN, hMod, NULL);
         btnX += buttonWidth + buttonSpacing;
 
         HWND hConfigBtn = CreateWindowA("BUTTON", "Open Config File",
                      WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                     btnX, y, configBtnWidth, buttonHeight, g_hSettingsDialog, (HMENU)1006, hMod, NULL);
+                     btnX, y, configBtnWidth, buttonHeight, g_hSettingsDialog, (HMENU)IDC_CONFIG_BTN, hMod, NULL);
         btnX += configBtnWidth + buttonSpacing;
 
         HWND hCloseBtn = CreateWindowA("BUTTON", "Close",
                      WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                     btnX, y, buttonWidth, buttonHeight, g_hSettingsDialog, (HMENU)1007, hMod, NULL);
+                     btnX, y, buttonWidth, buttonHeight, g_hSettingsDialog, (HMENU)IDC_CLOSE_BTN, hMod, NULL);
 
         // Calculate dialog size based on content
         int dialogWidth = margin + checkboxWidth + margin + ScaleDPI(20);  // Add extra for window borders
@@ -1046,18 +1093,18 @@ void ShowSettingsDialog() {
         // Set initial values
         char buffer[32];
         sprintf_s(buffer, 32, "%d", g_app.config.idleTimeout);
-        SetDlgItemTextA(g_hSettingsDialog, 1001, buffer);
+        SetDlgItemTextA(g_hSettingsDialog, IDC_TIMEOUT_EDIT, buffer);
 
         sprintf_s(buffer, 32, "%d", g_app.config.checkInterval);
-        SetDlgItemTextA(g_hSettingsDialog, 1008, buffer);
+        SetDlgItemTextA(g_hSettingsDialog, IDC_INTERVAL_EDIT, buffer);
 
-        CheckDlgButton(g_hSettingsDialog, 1002, g_app.config.mediaDetectionEnabled ? BST_CHECKED : BST_UNCHECKED);
-        CheckDlgButton(g_hSettingsDialog, 1003, g_app.config.debugMode ? BST_CHECKED : BST_UNCHECKED);
-        CheckDlgButton(g_hSettingsDialog, 1004, g_app.config.startupEnabled ? BST_CHECKED : BST_UNCHECKED);
-        CheckDlgButton(g_hSettingsDialog, 1009, g_app.config.perMonitorInputDetection ? BST_CHECKED : BST_UNCHECKED);
+        CheckDlgButton(g_hSettingsDialog, IDC_MEDIA_CHECK, g_app.config.mediaDetectionEnabled ? BST_CHECKED : BST_UNCHECKED);
+        CheckDlgButton(g_hSettingsDialog, IDC_DEBUG_CHECK, g_app.config.debugMode ? BST_CHECKED : BST_UNCHECKED);
+        CheckDlgButton(g_hSettingsDialog, IDC_STARTUP_CHECK, g_app.config.startupEnabled ? BST_CHECKED : BST_UNCHECKED);
+        CheckDlgButton(g_hSettingsDialog, IDC_PERMONITOR_CHECK, g_app.config.perMonitorInputDetection ? BST_CHECKED : BST_UNCHECKED);
 
         for (int i = 0; i < g_monitorCount; i++) {
-            CheckDlgButton(g_hSettingsDialog, 2000 + i, g_app.config.monitorsEnabled[i] ? BST_CHECKED : BST_UNCHECKED);
+            CheckDlgButton(g_hSettingsDialog, IDC_MONITOR_BASE + i, g_app.config.monitorsEnabled[i] ? BST_CHECKED : BST_UNCHECKED);
         }
 
         ShowWindow(g_hSettingsDialog, SW_SHOW);
@@ -1067,15 +1114,15 @@ void ShowSettingsDialog() {
 
 void ApplySettings(HWND hWnd) {
     char buffer[32];
-    GetDlgItemTextA(hWnd, 1001, buffer, 32);
+    GetDlgItemTextA(hWnd, IDC_TIMEOUT_EDIT, buffer, 32);
     int oldTimeout = g_app.config.idleTimeout;
     g_app.config.idleTimeout = atoi(buffer);
 
-    GetDlgItemTextA(hWnd, 1008, buffer, 32);
+    GetDlgItemTextA(hWnd, IDC_INTERVAL_EDIT, buffer, 32);
     int oldInterval = g_app.config.checkInterval;
     int newInterval = atoi(buffer);
-    if (newInterval < 250) newInterval = 250;
-    if (newInterval > 10000) newInterval = 10000;
+    if (newInterval < MIN_CHECK_INTERVAL_MS) newInterval = MIN_CHECK_INTERVAL_MS;
+    if (newInterval > MAX_CHECK_INTERVAL_MS) newInterval = MAX_CHECK_INTERVAL_MS;
     g_app.config.checkInterval = newInterval;
 
     int oldMedia = g_app.config.mediaDetectionEnabled;
@@ -1083,14 +1130,14 @@ void ApplySettings(HWND hWnd) {
     int oldStartup = g_app.config.startupEnabled;
     int oldPerMonitor = g_app.config.perMonitorInputDetection;
 
-    g_app.config.mediaDetectionEnabled = IsDlgButtonChecked(hWnd, 1002) == BST_CHECKED;
-    g_app.config.debugMode = IsDlgButtonChecked(hWnd, 1003) == BST_CHECKED;
-    g_app.config.startupEnabled = IsDlgButtonChecked(hWnd, 1004) == BST_CHECKED;
-    g_app.config.perMonitorInputDetection = IsDlgButtonChecked(hWnd, 1009) == BST_CHECKED;
+    g_app.config.mediaDetectionEnabled = IsDlgButtonChecked(hWnd, IDC_MEDIA_CHECK) == BST_CHECKED;
+    g_app.config.debugMode = IsDlgButtonChecked(hWnd, IDC_DEBUG_CHECK) == BST_CHECKED;
+    g_app.config.startupEnabled = IsDlgButtonChecked(hWnd, IDC_STARTUP_CHECK) == BST_CHECKED;
+    g_app.config.perMonitorInputDetection = IsDlgButtonChecked(hWnd, IDC_PERMONITOR_CHECK) == BST_CHECKED;
 
     for (int i = 0; i < g_monitorCount; i++) {
         int wasEnabled = g_app.config.monitorsEnabled[i];
-        g_app.config.monitorsEnabled[i] = IsDlgButtonChecked(hWnd, 2000 + i) == BST_CHECKED;
+        g_app.config.monitorsEnabled[i] = IsDlgButtonChecked(hWnd, IDC_MONITOR_BASE + i) == BST_CHECKED;
         g_monitorStates[i].enabled = g_app.config.monitorsEnabled[i];
 
         if (!g_app.config.monitorsEnabled[i] && g_monitorStates[i].screenSaverActive) {
@@ -1140,7 +1187,7 @@ void ApplySettings(HWND hWnd) {
     }
 
     sprintf_s(buffer, 32, "%d", g_app.config.checkInterval);
-    SetDlgItemTextA(hWnd, 1008, buffer);
+    SetDlgItemTextA(hWnd, IDC_INTERVAL_EDIT, buffer);
 }
 
 void UpdateTrayIcon(int active) {
@@ -1156,15 +1203,17 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
             g_app.hWnd = hWnd;
             g_app.isShuttingDown = 0;
 
-            HANDLE hMutex = CreateMutexW(NULL, TRUE, L"OLEDAegis_SingleInstance");
+            g_hInstanceMutex = CreateMutexW(NULL, TRUE, L"OLEDAegis_SingleInstance");
             if (GetLastError() == ERROR_ALREADY_EXISTS) {
                 MessageBoxW(NULL, L"OLED Aegis is already running", L"OLED Aegis", MB_OK | MB_ICONINFORMATION);
+                if (g_hInstanceMutex) {
+                    CloseHandle(g_hInstanceMutex);
+                    g_hInstanceMutex = NULL;
+                }
                 PostQuitMessage(0);
                 return -1;
             }
-            if (hMutex) {
-                CloseHandle(hMutex);
-            }
+            // Keep mutex handle open for app lifetime to maintain single-instance lock
 
             LoadTrayIcons();
 
@@ -1226,6 +1275,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
 
         case WM_TIMER:
             if (wParam == TIMER_IDLE_CHECK) {
+                // Skip all processing if no monitors have screen saver enabled
+                if (!IsAnyMonitorEnabled()) {
+                    break;
+                }
+
                 if (g_app.config.perMonitorInputDetection) {
                     DWORD idleTime = GetIdleTime();
                     time_t now = time(NULL);
@@ -1242,7 +1296,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
                         }
                     }
 
-                    if (idleTime < 1000 && !inManualCooldown) {
+                    if (idleTime < IDLE_ACTIVITY_THRESHOLD_MS && !inManualCooldown) {
                         POINT pt;
                         GetCursorPos(&pt);
                         int cursorMonitorIndex = GetMonitorIndexFromPoint(pt);
@@ -1283,7 +1337,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
                                 ShowScreenSaverOnMonitor(i, 0);
                             }
                         } else if (g_monitorStates[i].screenSaverActive && !inManualCooldown) {
-                            if (idleSeconds < 2) {
+                            if (idleSeconds < IDLE_DEACTIVATE_THRESHOLD_SEC) {
                                 LogMessage("Timer: Deactivating screen saver on monitor %d (input detected)", i);
                                 HideScreenSaverOnMonitor(i);
                             }
@@ -1332,7 +1386,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
                                     LogMessage("Timer: Skipping deactivation (manual cooldown: %lums/%dms)",
                                              timeSinceActivation, MANUAL_ACTIVATION_COOLDOWN_MS);
                                 } else {
-                                    if (idleTime < 2000) {
+                                    if (idleTime < IDLE_DEACTIVATE_THRESHOLD_MS) {
                                         LogMessage("Timer: Deactivating screen saver (new input detected after cooldown)");
                                         HideScreenSaver();
                                         UpdateTrayIcon(0);
@@ -1403,9 +1457,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
                 SetForegroundWindow(hWnd);
 
                 HMENU hMenu = CreatePopupMenu();
-                AppendMenuA(hMenu, MF_STRING, 1, "Settings...");
+                AppendMenuA(hMenu, MF_STRING, IDM_SETTINGS, "Settings...");
                 AppendMenuA(hMenu, MF_SEPARATOR, 0, NULL);
-                AppendMenuA(hMenu, MF_STRING, 2, "Exit");
+                AppendMenuA(hMenu, MF_STRING, IDM_EXIT, "Exit");
 
                 TrackPopupMenu(hMenu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hWnd, NULL);
                 DestroyMenu(hMenu);
@@ -1429,11 +1483,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
 
         case WM_COMMAND:
             switch (LOWORD(wParam)) {
-                case 1:
+                case IDM_SETTINGS:
                     LogMessage("User: Selected 'Settings' from tray menu");
                     ShowSettingsDialog();
                     break;
-                case 2:
+                case IDM_EXIT:
                     LogMessage("User: Selected 'Exit' from tray menu - shutting down");
                     HideScreenSaver();
                     Shell_NotifyIconA(NIM_DELETE, &g_app.nid);
@@ -1479,6 +1533,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
             // Note: Icons loaded via LoadIcon from resources don't need DestroyIcon
             g_hIconActive = NULL;
             g_hIconInactive = NULL;
+
+            if (g_hInstanceMutex) {
+                CloseHandle(g_hInstanceMutex);
+                g_hInstanceMutex = NULL;
+            }
 
             PostQuitMessage(0);
             break;
