@@ -66,6 +66,8 @@ See [BUILD.md](BUILD.md) for more information.
 
 ## Configuration
 
+![Right-click tray icon to configure the app settings.](images/settings_window_example.png)
+
 Configuration is stored in `%APPDATA%\OLED_Aegis\oled_aegis.ini`. This file is created automatically on first run. Edit it to customize behavior:
 
 ```ini
