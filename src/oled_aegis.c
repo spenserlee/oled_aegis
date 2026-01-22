@@ -73,14 +73,18 @@ void HideScreenSaverOnMonitor(int monitorIndex);
 int IsAnyMonitorActive();
 void UpdateTrayIcon(int active);
 int FindMonitorByDeviceName(const char* deviceName);
+int FindMonitorByDevicePath(const char* devicePath);
+int FindPrimaryMonitorIndex();
 int IsAnyMonitorEnabled();
 
 typedef struct {
     HMONITOR hMonitor;
     RECT rect;
     int monitorIndex;
-    char deviceName[CCHDEVICENAME];
-    char displayName[64];
+    char deviceName[CCHDEVICENAME];     // GDI device name (e.g., \\.\DISPLAY1)
+    char displayName[128];              // UI display name (friendly name + resolution)
+    char friendlyName[64];              // EDID friendly name (e.g., "LG OLED48C1")
+    char monitorDevicePath[256];        // Persistent device path for config matching
     int isPrimary;
     int width;
     int height;
@@ -255,6 +259,98 @@ void LogMessage(const char* format, ...) {
     }
 }
 
+// Get monitor friendly name and device path using DisplayConfig API
+// Returns 1 on success, 0 on failure
+int GetMonitorIdentifiers(const char* gdiDeviceName,
+                          char* friendlyName, int friendlyNameLen,
+                          char* devicePath, int devicePathLen) {
+    UINT32 pathCount = 0, modeCount = 0;
+    int result = 0;
+
+    if (friendlyName && friendlyNameLen > 0) friendlyName[0] = '\0';
+    if (devicePath && devicePathLen > 0) devicePath[0] = '\0';
+
+    LONG ret = GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &pathCount, &modeCount);
+    if (ret != ERROR_SUCCESS || pathCount == 0) {
+        return 0;
+    }
+
+    DISPLAYCONFIG_PATH_INFO* paths = malloc(pathCount * sizeof(DISPLAYCONFIG_PATH_INFO));
+    DISPLAYCONFIG_MODE_INFO* modes = malloc(modeCount * sizeof(DISPLAYCONFIG_MODE_INFO));
+    if (!paths || !modes) {
+        free(paths);
+        free(modes);
+        return 0;
+    }
+
+    ret = QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &pathCount, paths, &modeCount, modes, NULL);
+    if (ret != ERROR_SUCCESS) {
+        free(paths);
+        free(modes);
+        return 0;
+    }
+
+    // Convert GDI device name to wide string for comparison
+    WCHAR gdiDeviceNameW[CCHDEVICENAME];
+    MultiByteToWideChar(CP_ACP, 0, gdiDeviceName, -1, gdiDeviceNameW, CCHDEVICENAME);
+
+    // Find matching path
+    for (UINT32 i = 0; i < pathCount; i++) {
+        // Get source device name (GDI device name like \\.\DISPLAY1)
+        DISPLAYCONFIG_SOURCE_DEVICE_NAME sourceName = {0};
+        sourceName.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+        sourceName.header.size = sizeof(sourceName);
+        sourceName.header.adapterId = paths[i].sourceInfo.adapterId;
+        sourceName.header.id = paths[i].sourceInfo.id;
+
+        ret = DisplayConfigGetDeviceInfo(&sourceName.header);
+        if (ret != ERROR_SUCCESS) {
+            continue;
+        }
+
+        // Check if this source matches our GDI device name
+        if (wcscmp(sourceName.viewGdiDeviceName, gdiDeviceNameW) != 0) {
+            continue;
+        }
+
+        // Found matching source, now get target (monitor) info
+        DISPLAYCONFIG_TARGET_DEVICE_NAME targetName = {0};
+        targetName.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
+        targetName.header.size = sizeof(targetName);
+        targetName.header.adapterId = paths[i].targetInfo.adapterId;
+        targetName.header.id = paths[i].targetInfo.id;
+
+        ret = DisplayConfigGetDeviceInfo(&targetName.header);
+        if (ret != ERROR_SUCCESS) {
+            continue;
+        }
+
+        // Extract friendly name (if available from EDID)
+        if (friendlyName && friendlyNameLen > 0) {
+            if (targetName.flags.friendlyNameFromEdid) {
+                WideCharToMultiByte(CP_UTF8, 0, targetName.monitorFriendlyDeviceName, -1,
+                                   friendlyName, friendlyNameLen, NULL, NULL);
+            } else {
+                strncpy(friendlyName, "Unknown Monitor", friendlyNameLen - 1);
+                friendlyName[friendlyNameLen - 1] = '\0';
+            }
+        }
+
+        // Extract device path (persistent identifier)
+        if (devicePath && devicePathLen > 0) {
+            WideCharToMultiByte(CP_UTF8, 0, targetName.monitorDevicePath, -1,
+                               devicePath, devicePathLen, NULL, NULL);
+        }
+
+        result = 1;
+        break;
+    }
+
+    free(paths);
+    free(modes);
+    return result;
+}
+
 BOOL CALLBACK EnumMonitorCallback(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData) {
     MONITORINFOEXA mi;
     mi.cbSize = sizeof(MONITORINFOEXA);
@@ -279,14 +375,38 @@ BOOL CALLBACK EnumMonitorCallback(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprc
             g_monitors[g_monitorCount].height = lprcMonitor->bottom - lprcMonitor->top;
         }
 
-        // Format display name with device name (strip \\.\  prefix if present)
-        const char* displayDeviceName = g_monitors[g_monitorCount].deviceName;
-        if (strncmp(displayDeviceName, DEVICE_NAME_PREFIX, DEVICE_NAME_PREFIX_LEN) == 0) {
-            displayDeviceName += DEVICE_NAME_PREFIX_LEN;
+        // Get friendly name and device path using DisplayConfig API
+        int gotIdentifiers = GetMonitorIdentifiers(
+            mi.szDevice,
+            g_monitors[g_monitorCount].friendlyName,
+            sizeof(g_monitors[g_monitorCount].friendlyName),
+            g_monitors[g_monitorCount].monitorDevicePath,
+            sizeof(g_monitors[g_monitorCount].monitorDevicePath)
+        );
+
+        // Fallback: use GDI device name if DisplayConfig failed
+        if (!gotIdentifiers || g_monitors[g_monitorCount].friendlyName[0] == '\0') {
+            const char* fallbackName = mi.szDevice;
+            if (strncmp(fallbackName, DEVICE_NAME_PREFIX, DEVICE_NAME_PREFIX_LEN) == 0) {
+                fallbackName += DEVICE_NAME_PREFIX_LEN;
+            }
+            strncpy(g_monitors[g_monitorCount].friendlyName, fallbackName,
+                    sizeof(g_monitors[g_monitorCount].friendlyName) - 1);
+            g_monitors[g_monitorCount].friendlyName[sizeof(g_monitors[g_monitorCount].friendlyName) - 1] = '\0';
         }
-        snprintf(g_monitors[g_monitorCount].displayName, 64,
+
+        // Fallback: use GDI device name as device path if not available
+        if (!gotIdentifiers || g_monitors[g_monitorCount].monitorDevicePath[0] == '\0') {
+            strncpy(g_monitors[g_monitorCount].monitorDevicePath, mi.szDevice,
+                    sizeof(g_monitors[g_monitorCount].monitorDevicePath) - 1);
+            g_monitors[g_monitorCount].monitorDevicePath[sizeof(g_monitors[g_monitorCount].monitorDevicePath) - 1] = '\0';
+        }
+
+        // Format display name with friendly name, resolution, and primary indicator
+        snprintf(g_monitors[g_monitorCount].displayName,
+                sizeof(g_monitors[g_monitorCount].displayName),
                 "%s (%dx%d)%s",
-                displayDeviceName,
+                g_monitors[g_monitorCount].friendlyName,
                 g_monitors[g_monitorCount].width,
                 g_monitors[g_monitorCount].height,
                 g_monitors[g_monitorCount].isPrimary ? " [Primary]" : "");
@@ -396,12 +516,27 @@ void LoadConfig() {
 
     g_app.config.monitorCount = g_monitorCount;
 
+    int hadMonitorConfig = 0;  // Track if we found any monitor config entries
+    int anyMonitorMatched = 0; // Track if any monitor config matched current monitors
+
     FILE* f = fopen(configPath, "r");
     if (f) {
-        char line[256];
+        char line[512];  // Increased buffer size for longer device paths
         while (fgets(line, sizeof(line), f)) {
-            char key[64], value[64];
-            if (sscanf(line, "%63[^=]=%63s", key, value) == 2) {
+            // Strip comments (everything after ';' or '#')
+            char* comment = strchr(line, ';');
+            if (comment) *comment = '\0';
+            comment = strchr(line, '#');
+            if (comment) *comment = '\0';
+
+            // Trim trailing whitespace
+            size_t len = strlen(line);
+            while (len > 0 && (line[len-1] == ' ' || line[len-1] == '\t' || line[len-1] == '\n' || line[len-1] == '\r')) {
+                line[--len] = '\0';
+            }
+
+            char key[300], value[64];  // Increased key size for device paths
+            if (sscanf(line, "%299[^=]=%63s", key, value) == 2) {
                 if (strcmp(key, "idleTimeout") == 0) {
                     g_app.config.idleTimeout = atoi(value);
                 } else if (strcmp(key, "checkInterval") == 0) {
@@ -417,20 +552,51 @@ void LoadConfig() {
                 } else if (strcmp(key, "perMonitorInputDetection") == 0) {
                     g_app.config.perMonitorInputDetection = atoi(value);
                 } else if (strncmp(key, "monitorEnabled_", 15) == 0) {
-                    const char* deviceName = key + 15;
-                    int idx = FindMonitorByDeviceName(deviceName);
+                    const char* identifier = key + 15;
+                    hadMonitorConfig = 1;
+
+                    // Try matching by device path first (new format)
+                    int idx = FindMonitorByDevicePath(identifier);
+                    if (idx < 0) {
+                        // Fall back to device name match (legacy format: \\.\DISPLAY1)
+                        idx = FindMonitorByDeviceName(identifier);
+                    }
+
                     if (idx >= 0 && idx < MAX_MONITOR_COUNT) {
                         g_app.config.monitorsEnabled[idx] = atoi(value);
+                        if (atoi(value)) {
+                            anyMonitorMatched = 1;
+                        }
+                        LogMessage("Config: matched monitor %d (%s) from identifier: %s",
+                                  idx, g_monitors[idx].friendlyName, identifier);
+                    } else {
+                        LogMessage("Config: no match for monitor identifier: %s", identifier);
                     }
                 } else if (strncmp(key, "monitor", 7) == 0 && key[7] >= '0' && key[7] <= '9') {
+                    // Legacy format: monitor0=1, monitor1=0, etc.
                     int idx = atoi(key + 7);
-                    if (idx >= 0 && idx < MAX_MONITOR_COUNT) {
+                    hadMonitorConfig = 1;
+                    if (idx >= 0 && idx < MAX_MONITOR_COUNT && idx < g_monitorCount) {
                         g_app.config.monitorsEnabled[idx] = atoi(value);
+                        if (atoi(value)) {
+                            anyMonitorMatched = 1;
+                        }
                     }
                 }
             }
         }
         fclose(f);
+    }
+
+    // Fallback: if we had monitor config but none matched, enable the primary monitor
+    // This handles the case where display configuration changed (monitors unplugged/replugged)
+    if (hadMonitorConfig && !anyMonitorMatched) {
+        int primaryIdx = FindPrimaryMonitorIndex();
+        if (primaryIdx >= 0) {
+            g_app.config.monitorsEnabled[primaryIdx] = 1;
+            LogMessage("Config fallback: no monitors matched saved config, enabled primary monitor %d (%s)",
+                      primaryIdx, g_monitors[primaryIdx].friendlyName);
+        }
     }
 }
 
@@ -448,8 +614,12 @@ void SaveConfig() {
         fprintf(f, "startupEnabled=%d\n", g_app.config.startupEnabled);
         fprintf(f, "debugMode=%d\n", g_app.config.debugMode);
         fprintf(f, "perMonitorInputDetection=%d\n", g_app.config.perMonitorInputDetection);
+        // Save monitor settings using persistent device path as key, with comment showing friendly name
         for (int i = 0; i < g_monitorCount; i++) {
-            fprintf(f, "monitorEnabled_%s=%d\n", g_monitors[i].deviceName, g_app.config.monitorsEnabled[i]);
+            fprintf(f, "monitorEnabled_%s=%d ; %s\n",
+                    g_monitors[i].monitorDevicePath,
+                    g_app.config.monitorsEnabled[i],
+                    g_monitors[i].displayName);
         }
         fclose(f);
     }
@@ -519,6 +689,24 @@ int IsAnyMonitorEnabled() {
 int FindMonitorByDeviceName(const char* deviceName) {
     for (int i = 0; i < g_monitorCount; i++) {
         if (strcmp(g_monitors[i].deviceName, deviceName) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+int FindMonitorByDevicePath(const char* devicePath) {
+    for (int i = 0; i < g_monitorCount; i++) {
+        if (strcmp(g_monitors[i].monitorDevicePath, devicePath) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+int FindPrimaryMonitorIndex() {
+    for (int i = 0; i < g_monitorCount; i++) {
+        if (g_monitors[i].isPrimary) {
             return i;
         }
     }

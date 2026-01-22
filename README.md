@@ -68,19 +68,7 @@ See [BUILD.md](BUILD.md) for more information.
 
 ![Right-click tray icon to configure the app settings.](images/settings_window_example.png)
 
-Configuration is stored in `%APPDATA%\OLED_Aegis\oled_aegis.ini`. This file is created automatically on first run. Edit it to customize behavior:
-
-```ini
-idleTimeout=300
-checkInterval=1000
-mediaDetectionEnabled=1
-startupEnabled=0
-debugMode=0
-perMonitorInputDetection=0
-monitorEnabled_\\.\DISPLAY1=1
-monitorEnabled_\\.\DISPLAY2=1
-monitorEnabled_\\.\DISPLAY3=0
-```
+Configuration is stored in `%APPDATA%\OLED_Aegis\oled_aegis.ini`. This file is created automatically on first run.
 
 ### Settings
 
@@ -88,9 +76,9 @@ monitorEnabled_\\.\DISPLAY3=0
 * **checkInterval**: Milliseconds between idle time checks (default: 1000ms, min: 250ms, max: 10000ms)
 * **mediaDetectionEnabled**: Set to `1` to prevent screen saver during media playback, `0` to disable (default: 1)
 * **startupEnabled**: Set to `1` to run at Windows startup, `0` to disable (default: 0)
-* **debugMode**: Set to `1` to enable debug logging to `%APPDATA%\OLED_Aegis\oled_aegis_debug.log`, `0` to disable (default: 0). **Note:** Enable only if troubleshooting issues, as continuous file I/O every `checkInterval` milliseconds may impact performance of other applications.
+* **debugMode**: Set to `1` to enable debug logging to `%APPDATA%\OLED_Aegis\oled_aegis_debug.log`, `0` to disable (default: 0). **Note:** only for troubleshooting issues.
 * **perMonitorInputDetection**: Set to `1` to track input separately for each monitor (default: 0). When enabled, each monitor has its own idle timer based on mouse cursor position and focused window location. This allows the screen saver to activate on unused monitors while you continue working on others.
-* **monitorEnabled_\<device\>**: Set to `1` to enable screen saver on the specified monitor, `0` to disable (default: 1 for all). The device name (e.g., `\\.\DISPLAY1`) uniquely identifies each monitor, so settings persist correctly even when monitors are powered off/on or display configuration changes.
+* **monitorEnabled_\<device\>**: Set to `1` to enable screen saver on the specified monitor, `0` to disable (default: 1 for all).
 
 ## Usage
 
@@ -123,17 +111,6 @@ This allows you to:
 - Continue using one monitor while others activate their screen savers
 - Have different monitors timeout independently based on where you're actively working
 - Keep your OLED monitor protected while watching content on a secondary display
-
-### Known Issues
-
-**Media Detection Limitation**: The media detection feature uses system-wide Windows Power Management APIs, which cannot distinguish which specific monitor has media playing. If media is playing on ANY monitor (including those with screen saver disabled), it will prevent screen saver activation on ALL configured monitors.
-
-However, with per-monitor input detection, there is a workaround for viewing
-content on secondary monitors. For example, you can initiate media playback and
-then left-click the tray icon to activate the screen saver. Alternatively, if
-the screen saver is already active and you use Bluetooth or keyboard controls to
-start media playback and the screen saver will not be disabled (provided the
-focused media window isn't on the screen saver configured display).
 
 ## Why didn't you just make a custom Screen Saver (`.scr`)?
 
