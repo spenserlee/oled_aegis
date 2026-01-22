@@ -841,6 +841,16 @@ void HideScreenSaver() {
     }
 }
 
+void EnsureScreenSaverTopmost() {
+    for (int i = 0; i < g_monitorCount; i++) {
+        if (g_monitorStates[i].screenSaverActive && g_monitorStates[i].hScreenSaverWnd) {
+            SetWindowPos(g_monitorStates[i].hScreenSaverWnd, HWND_TOPMOST,
+                        0, 0, 0, 0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
+    }
+}
+
 void OpenConfigFileLocation() {
     char appDataPath[MAX_PATH];
     char configPath[MAX_PATH];
@@ -1399,6 +1409,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
                             }
                         }
                     }
+                }
+
+                // Ensure screen saver windows stay on top (handles notifications like MS Teams)
+                if (IsAnyMonitorActive()) {
+                    EnsureScreenSaverTopmost();
                 }
             }
             break;
