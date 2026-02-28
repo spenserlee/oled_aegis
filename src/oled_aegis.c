@@ -523,10 +523,8 @@ void LoadConfig() {
     if (f) {
         char line[512];  // Increased buffer size for longer device paths
         while (fgets(line, sizeof(line), f)) {
-            // Strip comments (everything after ';' or '#')
+            // Strip inline comments (everything after ';')
             char* comment = strchr(line, ';');
-            if (comment) *comment = '\0';
-            comment = strchr(line, '#');
             if (comment) *comment = '\0';
 
             // Trim trailing whitespace
