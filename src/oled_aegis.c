@@ -33,6 +33,7 @@
 #define IDC_CLOSE_BTN           1007
 #define IDC_INTERVAL_EDIT       1008
 #define IDC_PERMONITOR_CHECK    1009
+#define IDC_PIXELSHIFT_EDIT     1010
 #define IDC_MONITOR_BASE        2000  // Monitor checkboxes: IDC_MONITOR_BASE + index
 
 // Tray context menu command IDs
@@ -106,6 +107,7 @@ typedef struct {
     int startupEnabled;
     int debugMode;
     int perMonitorInputDetection;
+    int pixelShiftCompensation;
 } Config;
 
 typedef struct {
@@ -549,6 +551,8 @@ void LoadConfig() {
                     g_app.config.debugMode = atoi(value);
                 } else if (strcmp(key, "perMonitorInputDetection") == 0) {
                     g_app.config.perMonitorInputDetection = atoi(value);
+                } else if (strcmp(key, "pixelShiftCompensation") == 0) {
+                    g_app.config.pixelShiftCompensation = atoi(value);
                 } else if (strncmp(key, "monitorEnabled_", 15) == 0) {
                     const char* identifier = key + 15;
                     hadMonitorConfig = 1;
@@ -612,6 +616,7 @@ void SaveConfig() {
         fprintf(f, "startupEnabled=%d\n", g_app.config.startupEnabled);
         fprintf(f, "debugMode=%d\n", g_app.config.debugMode);
         fprintf(f, "perMonitorInputDetection=%d\n", g_app.config.perMonitorInputDetection);
+        fprintf(f, "pixelShiftCompensation=%d\n", g_app.config.pixelShiftCompensation);
         // Save monitor settings using persistent device path as key, with comment showing friendly name
         for (int i = 0; i < g_monitorCount; i++) {
             fprintf(f, "monitorEnabled_%s=%d ; %s\n",
@@ -915,18 +920,31 @@ void ShowScreenSaverOnMonitor(int monitorIndex, int isManual) {
     }
 
     if (g_monitorStates[monitorIndex].hScreenSaverWnd) {
+        // Reposition and resize in case the pixel shift compensation setting changed since the
+        // window was last created.
+        int pad = g_app.config.pixelShiftCompensation;
+        SetWindowPos(g_monitorStates[monitorIndex].hScreenSaverWnd, HWND_TOPMOST,
+                     g_monitors[monitorIndex].rect.left   - pad,
+                     g_monitors[monitorIndex].rect.top    - pad,
+                     g_monitors[monitorIndex].rect.right  - g_monitors[monitorIndex].rect.left + pad * 2,
+                     g_monitors[monitorIndex].rect.bottom - g_monitors[monitorIndex].rect.top  + pad * 2,
+                     SWP_NOACTIVATE);
         ShowWindow(g_monitorStates[monitorIndex].hScreenSaverWnd, SW_SHOW);
         UpdateWindow(g_monitorStates[monitorIndex].hScreenSaverWnd);
         g_monitorStates[monitorIndex].screenSaverActive = 1;
         LogMessage("Screen saver window shown on monitor %d (reused)", monitorIndex);
     } else {
+        // Expand the window beyond the monitor's reported bounds by the pixel shift compensation
+        // amount on all four sides. This ensures hardware pixel shift (used by some OLED panels
+        // to reduce burn-in) cannot expose the desktop behind the screen saver window.
+        int pad = g_app.config.pixelShiftCompensation;
         HWND hWnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
                                    L"OLEDAegisScreen", L"",
                                    WS_POPUP,
-                                   g_monitors[monitorIndex].rect.left,
-                                   g_monitors[monitorIndex].rect.top,
-                                   g_monitors[monitorIndex].rect.right - g_monitors[monitorIndex].rect.left,
-                                   g_monitors[monitorIndex].rect.bottom - g_monitors[monitorIndex].rect.top,
+                                   g_monitors[monitorIndex].rect.left   - pad,
+                                   g_monitors[monitorIndex].rect.top    - pad,
+                                   g_monitors[monitorIndex].rect.right  - g_monitors[monitorIndex].rect.left + pad * 2,
+                                   g_monitors[monitorIndex].rect.bottom - g_monitors[monitorIndex].rect.top  + pad * 2,
                                    NULL, NULL, GetModuleHandle(NULL), NULL);
 
         if (hWnd) {
@@ -1190,6 +1208,19 @@ void ShowSettingsDialog() {
         SendMessage(hIntervalUpDown, UDM_SETRANGE, 0, MAKELPARAM(MAX_CHECK_INTERVAL_MS, MIN_CHECK_INTERVAL_MS));
         y += rowHeight + ScaleDPI(5);
 
+        HWND hPixelShiftLabel = CreateWindowA("STATIC", "Pixel Shift Compensation (px):",
+                     WS_CHILD | WS_VISIBLE,
+                     margin, y, labelWidth, controlHeight, g_hSettingsDialog, NULL, hMod, NULL);
+        HWND hPixelShiftEdit = CreateWindowExA(0, "EDIT", "",
+                     WS_CHILD | WS_VISIBLE | WS_BORDER | ES_NUMBER,
+                     margin + labelWidth, y, editWidth, controlHeight,
+                     g_hSettingsDialog, (HMENU)IDC_PIXELSHIFT_EDIT, hMod, NULL);
+        HWND hPixelShiftUpDown = CreateWindowExA(0, UPDOWN_CLASS, "",
+                     WS_CHILD | WS_VISIBLE | UDS_AUTOBUDDY | UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_ARROWKEYS,
+                     0, 0, 0, 0, g_hSettingsDialog, NULL, hMod, hPixelShiftEdit);
+        SendMessage(hPixelShiftUpDown, UDM_SETRANGE, 0, MAKELPARAM(32, 0));
+        y += rowHeight + ScaleDPI(5);
+
         HWND hVideoCheck = CreateWindowA("BUTTON", "Prevent Screen Saver During Media Playback",
                      WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
                      margin, y, checkboxWidth, controlHeight, g_hSettingsDialog, (HMENU)IDC_MEDIA_CHECK, hMod, NULL);
@@ -1266,6 +1297,9 @@ void ShowSettingsDialog() {
             SendMessageA(hDebugCheck, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
             SendMessageA(hStartupCheck, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
             SendMessageA(hPerMonitorCheck, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
+            SendMessageA(hPixelShiftLabel, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
+            SendMessageA(hPixelShiftEdit, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
+            SendMessageA(hPixelShiftUpDown, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
             SendMessageA(hMonitorsLabel, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
             SendMessageA(hApplyBtn, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
             SendMessageA(hConfigBtn, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
@@ -1285,6 +1319,9 @@ void ShowSettingsDialog() {
                    "Automatically start OLED Aegis when you log into Windows.");
         AddTooltip(g_hSettingsDialog, hPerMonitorCheck,
                    "Track input separately for each monitor. Allows screen saver to activate on unused monitors while you continue using others.");
+        AddTooltip(g_hSettingsDialog, hPixelShiftEdit,
+                   "Expand the screen saver window beyond the monitor bounds by this many pixels on each side. "
+                   "Use 4-8 on QD-OLED panels (e.g. Alienware) to prevent hardware pixel shift from exposing the desktop edge. (0 = disabled)");
 
         // Set initial values
         char buffer[32];
@@ -1298,6 +1335,9 @@ void ShowSettingsDialog() {
         CheckDlgButton(g_hSettingsDialog, IDC_DEBUG_CHECK, g_app.config.debugMode ? BST_CHECKED : BST_UNCHECKED);
         CheckDlgButton(g_hSettingsDialog, IDC_STARTUP_CHECK, g_app.config.startupEnabled ? BST_CHECKED : BST_UNCHECKED);
         CheckDlgButton(g_hSettingsDialog, IDC_PERMONITOR_CHECK, g_app.config.perMonitorInputDetection ? BST_CHECKED : BST_UNCHECKED);
+
+        sprintf_s(buffer, 32, "%d", g_app.config.pixelShiftCompensation);
+        SetDlgItemTextA(g_hSettingsDialog, IDC_PIXELSHIFT_EDIT, buffer);
 
         for (int i = 0; i < g_monitorCount; i++) {
             CheckDlgButton(g_hSettingsDialog, IDC_MONITOR_BASE + i, g_app.config.monitorsEnabled[i] ? BST_CHECKED : BST_UNCHECKED);
@@ -1330,6 +1370,12 @@ void ApplySettings(HWND hWnd) {
     g_app.config.debugMode = IsDlgButtonChecked(hWnd, IDC_DEBUG_CHECK) == BST_CHECKED;
     g_app.config.startupEnabled = IsDlgButtonChecked(hWnd, IDC_STARTUP_CHECK) == BST_CHECKED;
     g_app.config.perMonitorInputDetection = IsDlgButtonChecked(hWnd, IDC_PERMONITOR_CHECK) == BST_CHECKED;
+
+    GetDlgItemTextA(hWnd, IDC_PIXELSHIFT_EDIT, buffer, 32);
+    int newPixelShift = atoi(buffer);
+    if (newPixelShift < 0) newPixelShift = 0;
+    if (newPixelShift > 32) newPixelShift = 32;
+    g_app.config.pixelShiftCompensation = newPixelShift;
 
     for (int i = 0; i < g_monitorCount; i++) {
         int wasEnabled = g_app.config.monitorsEnabled[i];
@@ -1368,13 +1414,14 @@ void ApplySettings(HWND hWnd) {
     SaveConfig();
     UpdateStartupRegistry();
 
-    LogMessage("Settings applied: timeout %ds->%ds, interval %dms->%dms, media %d->%d, debug %d->%d, startup %d->%d, perMonitor %d->%d",
+    LogMessage("Settings applied: timeout %ds->%ds, interval %dms->%dms, media %d->%d, debug %d->%d, startup %d->%d, perMonitor %d->%d, pixelShift %dpx",
              oldTimeout, g_app.config.idleTimeout,
              oldInterval, g_app.config.checkInterval,
              oldMedia, g_app.config.mediaDetectionEnabled,
              oldDebug, g_app.config.debugMode,
              oldStartup, g_app.config.startupEnabled,
-             oldPerMonitor, g_app.config.perMonitorInputDetection);
+             oldPerMonitor, g_app.config.perMonitorInputDetection,
+             g_app.config.pixelShiftCompensation);
 
     if (oldInterval != g_app.config.checkInterval) {
         KillTimer(g_app.hWnd, TIMER_IDLE_CHECK);
