@@ -1,6 +1,6 @@
 # OLED Aegis
 
-A lightweight, reliable screen saver for Windows.
+A Windows screen saver app tailored for OLED monitors.
 
 ## Why I made this
 
@@ -9,8 +9,8 @@ built-in screen saver has some issues:
 
 * Randomly not activating after putting the computer to sleep.
 * Breaks Bluetooth pause/play interactions when the screen saver is active.
-* Does not provide a way to only turn on screen saver on one monitor in a
-  multi-monitor setup. (I only want to enable the screen saver on my OLED
+* **Does not provide a way to only turn on screen saver on one monitor in a
+  multi-monitor setup.** (I only want to enable the screen saver on my OLED
   monitor)
 
 Solution: make my own screen saver app and give it a bad name.
@@ -20,6 +20,12 @@ simplest way possible: draw a black fullscreen window after a period of user
 inactivity on the specified monitors.
 
 > **Note**: It should work just fine on Windows 10, but I only tested it on Windows 11.
+
+## Download & Installation
+
+Download the latest `oled_aegis.exe` from the [Releases page](https://github.com/spenserlee/oled_aegis/releases). No installation required - simply run the executable.
+
+For convenient access, you can place it in any folder and create a shortcut, or add it to your Windows startup folder.
 
 ## Features
 
@@ -32,38 +38,6 @@ inactivity on the specified monitors.
 * **System Tray Integration**: Taskbar icon for easy control
 * **Startup Support**: Automatically run when Windows starts
 
-## Download & Installation
-
-Download the latest `oled_aegis.exe` from the [Releases page](https://github.com/spenserlee/oled_aegis/releases). No installation required - simply run the executable.
-
-For convenient access, you can place it in any folder and create a shortcut, or add it to your Windows startup folder.
-
-## Building
-
-Requires Visual Studio (2015 or later) with the C++ build tools installed.
-
-### Windows (Command Prompt)
-```batch
-build.bat
-```
-
-### Windows (PowerShell)
-```powershell
-.\build.ps1
-```
-
-### WSL
-```bash
-./build.sh
-```
-
-### Manual Build
-```batch
-cl.exe src\oled_aegis.c /Fe:oled_aegis.exe /O2 /MD /link user32.lib shell32.lib ole32.lib uuid.lib gdi32.lib advapi32.lib comctl32.lib powrprof.lib
-```
-
-See [BUILD.md](BUILD.md) for more information.
-
 ## Configuration
 
 ![Right-click tray icon to configure the app settings.](images/settings_window_example.png)
@@ -74,6 +48,7 @@ Configuration is stored in `%APPDATA%\OLED_Aegis\oled_aegis.ini`. This file is c
 
 * **idleTimeout**: Seconds of inactivity before screen saver activates (default: 300 seconds = 5 minutes)
 * **checkInterval**: Milliseconds between idle time checks (default: 1000ms, min: 250ms, max: 10000ms)
+* **pixelShiftCompensation**: Pixels to expand the screen saver window beyond the monitor's reported bounds on each side (default: 0, disabled). Set to `4`–`8` if your QD-OLED panel's hardware pixel shift feature causes a thin strip of the desktop to appear at the screen edge during screen saver activation.
 * **mediaDetectionEnabled**: Set to `1` to prevent screen saver during media playback, `0` to disable (default: 1)
 * **startupEnabled**: Set to `1` to run at Windows startup, `0` to disable (default: 0)
 * **debugMode**: Set to `1` to enable debug logging to `%APPDATA%\OLED_Aegis\oled_aegis_debug.log`, `0` to disable (default: 0). **Note:** only for troubleshooting issues.
@@ -111,6 +86,32 @@ This allows you to:
 - Continue using one monitor while others activate their screen savers
 - Have different monitors timeout independently based on where you're actively working
 - Keep your OLED monitor protected while watching content on a secondary display
+
+## Building
+
+Requires Visual Studio (2015 or later) with the C++ build tools installed.
+
+### Windows (Command Prompt)
+```batch
+build.bat
+```
+
+### Windows (PowerShell)
+```powershell
+.\build.ps1
+```
+
+### WSL
+```bash
+./build.sh
+```
+
+### Manual Build
+```batch
+cl.exe src\oled_aegis.c /Fe:oled_aegis.exe /O2 /MD /link user32.lib shell32.lib ole32.lib uuid.lib gdi32.lib advapi32.lib comctl32.lib powrprof.lib psapi.lib
+```
+
+See [BUILD.md](BUILD.md) for more information.
 
 ## Why didn't you just make a custom Screen Saver (`.scr`)?
 
