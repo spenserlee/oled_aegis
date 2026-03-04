@@ -56,6 +56,10 @@
 #define MIN_IDLE_TIMEOUT_SEC    5
 #define MAX_IDLE_TIMEOUT_SEC    3600
 
+// Pixel shift compensation bounds (pixels)
+#define MIN_PIXEL_SHIFT_COMPENSATION    0
+#define MAX_PIXEL_SHIFT_COMPENSATION    1024
+
 // Device name prefix for display devices (e.g., "\\.\DISPLAY1")
 #define DEVICE_NAME_PREFIX      "\\\\.\\"
 #define DEVICE_NAME_PREFIX_LEN  4
@@ -1218,7 +1222,7 @@ void ShowSettingsDialog() {
         HWND hPixelShiftUpDown = CreateWindowExA(0, UPDOWN_CLASS, "",
                      WS_CHILD | WS_VISIBLE | UDS_AUTOBUDDY | UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_ARROWKEYS,
                      0, 0, 0, 0, g_hSettingsDialog, NULL, hMod, hPixelShiftEdit);
-        SendMessage(hPixelShiftUpDown, UDM_SETRANGE, 0, MAKELPARAM(32, 0));
+        SendMessage(hPixelShiftUpDown, UDM_SETRANGE, 0, MAKELPARAM(MAX_PIXEL_SHIFT_COMPENSATION, MIN_PIXEL_SHIFT_COMPENSATION));
         y += rowHeight + ScaleDPI(5);
 
         HWND hVideoCheck = CreateWindowA("BUTTON", "Prevent Screen Saver During Media Playback",
@@ -1373,8 +1377,8 @@ void ApplySettings(HWND hWnd) {
 
     GetDlgItemTextA(hWnd, IDC_PIXELSHIFT_EDIT, buffer, 32);
     int newPixelShift = atoi(buffer);
-    if (newPixelShift < 0) newPixelShift = 0;
-    if (newPixelShift > 32) newPixelShift = 32;
+    if (newPixelShift < MIN_PIXEL_SHIFT_COMPENSATION) newPixelShift = MIN_PIXEL_SHIFT_COMPENSATION;
+    if (newPixelShift > MAX_PIXEL_SHIFT_COMPENSATION) newPixelShift = MAX_PIXEL_SHIFT_COMPENSATION;
     g_app.config.pixelShiftCompensation = newPixelShift;
 
     for (int i = 0; i < g_monitorCount; i++) {
