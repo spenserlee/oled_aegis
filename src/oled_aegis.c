@@ -471,35 +471,6 @@ LRESULT CALLBACK MonitorWindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARA
     return 0;
 }
 
-BOOL CALLBACK CreateMonitorWindowsCallback(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData) {
-    if (g_currentMonitorIndex >= MAX_MONITOR_COUNT) return TRUE;
-
-    if (g_app.config.monitorsEnabled[g_currentMonitorIndex]) {
-        if (g_monitorStates[g_currentMonitorIndex].hScreenSaverWnd) {
-            ShowWindow(g_monitorStates[g_currentMonitorIndex].hScreenSaverWnd, SW_SHOW);
-            UpdateWindow(g_monitorStates[g_currentMonitorIndex].hScreenSaverWnd);
-        } else {
-            HWND hWnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
-                                       L"OLEDAegisScreen", L"",
-                                       WS_POPUP,
-                                       lprcMonitor->left, lprcMonitor->top,
-                                       lprcMonitor->right - lprcMonitor->left,
-                                       lprcMonitor->bottom - lprcMonitor->top,
-                                       NULL, NULL, GetModuleHandle(NULL), NULL);
-
-            if (hWnd) {
-                ShowWindow(hWnd, SW_SHOW);
-                UpdateWindow(hWnd);
-                g_monitorStates[g_currentMonitorIndex].hScreenSaverWnd = hWnd;
-            }
-        }
-        g_monitorStates[g_currentMonitorIndex].screenSaverActive = 1;
-    }
-
-    g_currentMonitorIndex++;
-    return TRUE;
-}
-
 int ConfigFileExists() {
     char appDataPath[MAX_PATH];
     char configPath[MAX_PATH];
@@ -1810,7 +1781,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     RegisterClassW(&wc);
 
-    HWND hWnd = CreateWindowExW(0, L"OLEDAegisWindow", APP_NAME, 0, 0, 0, 0, 0, NULL, NULL, hInstance, NULL);
+    CreateWindowExW(0, L"OLEDAegisWindow", APP_NAME, 0, 0, 0, 0, 0, NULL, NULL, hInstance, NULL);
 
     MSG msg;
     while (GetMessage(&msg, NULL, 0, 0)) {
