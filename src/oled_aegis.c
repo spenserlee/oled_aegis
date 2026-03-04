@@ -440,6 +440,8 @@ LRESULT CALLBACK MonitorWindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARA
             EndPaint(hWnd, &ps);
             break;
         }
+        case WM_ERASEBKGND:
+            return 1;
         case WM_LBUTTONDOWN:
         case WM_RBUTTONDOWN:
         case WM_MBUTTONDOWN:
@@ -1480,7 +1482,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
             g_blackBrush = CreateSolidBrush(RGB(0, 0, 0));
 
             WNDCLASSW wc = {0};
-            wc.style = CS_HREDRAW | CS_VREDRAW;
             wc.lpfnWndProc = MonitorWindowProc;
             wc.hInstance = GetModuleHandle(NULL);
             wc.hbrBackground = g_blackBrush;
