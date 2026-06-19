@@ -139,6 +139,7 @@ static int g_monitorCount = 0;
 static int g_currentMonitorIndex = 0;
 static MonitorInfo g_monitors[MAX_MONITOR_COUNT];
 static MonitorState g_monitorStates[MAX_MONITOR_COUNT];
+static UINT g_uTaskbarRestart = 0;  // Registered "TaskbarCreated" message ID (0 if not registered)
 
 int ScaleDPI(int value) {
     return MulDiv(value, g_settingsDpi, 96);
@@ -1417,6 +1418,14 @@ void UpdateTrayIcon(int active) {
 }
 
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    if (message == g_uTaskbarRestart && g_uTaskbarRestart != 0 && g_app.nid.cbSize != 0) {
+        LogMessage("Taskbar recreated (Explorer restart) - restoring tray icon");
+        g_app.nid.hIcon = g_app.screenSaverActive ? g_hIconActive : g_hIconInactive;
+        lstrcpyA(g_app.nid.szTip, g_app.screenSaverActive ? "OLED Aegis - Active" : "OLED Aegis - Idle");
+        Shell_NotifyIconA(NIM_ADD, &g_app.nid);
+        return 0;
+    }
+
     switch (message) {
         case WM_CREATE:
             memset(&g_app, 0, sizeof(g_app));
@@ -1774,6 +1783,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
     SetProcessDPIAware();
+
+    g_uTaskbarRestart = RegisterWindowMessageW(L"TaskbarCreated");
 
     WNDCLASSW wc = {0};
     wc.lpfnWndProc = WndProc;
