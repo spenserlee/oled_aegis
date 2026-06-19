@@ -4,12 +4,27 @@
 #include <stdio.h>
 #include <time.h>
 #include <stdarg.h>
+#include <string.h>
 #include <commctrl.h>
 #include <powerbase.h>
 #include <psapi.h>
+#include <dwmapi.h>
+#include <mmdeviceapi.h>
+#include <audiopolicy.h>
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "powrprof.lib")
 #pragma comment(lib, "psapi.lib")
+#pragma comment(lib, "dwmapi.lib")
+#pragma comment(lib, "ole32.lib")
+
+// The MMDevice / audio-session GUIDs are only extern-declared in the SDK
+// headers, not DEFINE_GUID'd, so they don't resolve at link time. INITGUID is
+// defined via the build command (/D "INITGUID"), so these DEFINE_GUID lines
+// emit the actual definitions with SELECTANY storage.
+DEFINE_GUID(CLSID_MMDeviceEnumerator,     0xBCDE0395, 0xE52F, 0x467C, 0x8E, 0x3D, 0xC4, 0x57, 0x92, 0x91, 0x69, 0x2E);
+DEFINE_GUID(IID_IMMDeviceEnumerator,      0xA95664D2, 0x9614, 0x4F35, 0xA7, 0x46, 0xDE, 0x8D, 0xB6, 0x36, 0x17, 0xE6);
+DEFINE_GUID(IID_IAudioSessionManager2,    0x77AA99A0, 0x1BD6, 0x484F, 0x8B, 0xC7, 0x2C, 0x65, 0x4C, 0x9A, 0x9B, 0x6F);
+DEFINE_GUID(IID_IAudioSessionControl2,    0xBFB7FF88, 0x7239, 0x4FC9, 0x8F, 0xA2, 0x07, 0xC9, 0x50, 0xBE, 0x9C, 0x6D);
 
 #define APP_NAME L"OLED Aegis"
 #define WM_TRAYICON (WM_USER + 1)
@@ -33,6 +48,7 @@
 #define IDC_CLOSE_BTN           1007
 #define IDC_INTERVAL_EDIT       1008
 #define IDC_PERMONITOR_CHECK    1009
+#define IDC_PERMONITOR_MEDIA_CHECK 1011
 #define IDC_PIXELSHIFT_EDIT     1010
 #define IDC_MONITOR_BASE        2000  // Monitor checkboxes: IDC_MONITOR_BASE + index
 
@@ -47,6 +63,10 @@
 #define IDLE_DEACTIVATE_THRESHOLD_SEC 2     // Time threshold in seconds (for per-monitor mode)
 #define SHELL_CLOSE_DELAY_MS        250     // Delay after sending Escape to close shell windows
 #define SHELL_CLOSE_MAX_ATTEMPTS    2       // Maximum attempts to close shell windows
+#define MIN_MEDIA_WINDOW_AREA       10000   // Ignore tiny windows when mapping media to monitors
+#define MIN_MEDIA_WINDOW_OVERLAP_RATIO 0.10 // Ignore thin window-border overlap onto adjacent monitors
+#define MEDIA_DETECTION_CACHE_MS    2000    // Cache media-window scans to keep timer work light
+#define MAX_ACTIVE_AUDIO_PIDS       64      // Upper bound on concurrently active audio sessions we track
 
 // Check interval bounds (milliseconds)
 #define MIN_CHECK_INTERVAL_MS   250
@@ -77,10 +97,13 @@ void HideScreenSaver();
 void HideScreenSaverOnMonitor(int monitorIndex);
 int IsAnyMonitorActive();
 void UpdateTrayIcon(int active);
+void LogMessage(const char* format, ...);
 int FindMonitorByDeviceName(const char* deviceName);
 int FindMonitorByDevicePath(const char* devicePath);
 int FindPrimaryMonitorIndex();
 int IsAnyMonitorEnabled();
+int GetProcessNameFromHwnd(HWND hWnd, char* buffer, int bufferSize);
+int UpdateMediaMonitorStates(int mediaOnMonitor[MAX_MONITOR_COUNT]);
 
 typedef struct {
     HMONITOR hMonitor;
@@ -111,6 +134,7 @@ typedef struct {
     int startupEnabled;
     int debugMode;
     int perMonitorInputDetection;
+    int perMonitorMediaDetection;
     int pixelShiftCompensation;
 } Config;
 
@@ -529,6 +553,8 @@ void LoadConfig() {
                     g_app.config.debugMode = atoi(value);
                 } else if (strcmp(key, "perMonitorInputDetection") == 0) {
                     g_app.config.perMonitorInputDetection = atoi(value);
+                } else if (strcmp(key, "perMonitorMediaDetection") == 0) {
+                    g_app.config.perMonitorMediaDetection = atoi(value);
                 } else if (strcmp(key, "pixelShiftCompensation") == 0) {
                     g_app.config.pixelShiftCompensation = atoi(value);
                 } else if (strncmp(key, "monitorEnabled_", 15) == 0) {
@@ -594,6 +620,7 @@ void SaveConfig() {
         fprintf(f, "startupEnabled=%d\n", g_app.config.startupEnabled);
         fprintf(f, "debugMode=%d\n", g_app.config.debugMode);
         fprintf(f, "perMonitorInputDetection=%d\n", g_app.config.perMonitorInputDetection);
+        fprintf(f, "perMonitorMediaDetection=%d\n", g_app.config.perMonitorMediaDetection);
         fprintf(f, "pixelShiftCompensation=%d\n", g_app.config.pixelShiftCompensation);
         // Save monitor settings using persistent device path as key, with comment showing friendly name
         for (int i = 0; i < g_monitorCount; i++) {
@@ -761,6 +788,493 @@ int GetProcessNameFromHwnd(HWND hWnd, char* buffer, int bufferSize) {
     CloseHandle(hProcess);
 
     return result > 0 ? 1 : 0;
+}
+
+// Case-insensitive substring search (MSVC _strnicmp-based)
+int ContainsIgnoreCase(const char* haystack, const char* needle) {
+    if (!haystack || !needle) return 0;
+
+    size_t needleLen = strlen(needle);
+    if (needleLen == 0) return 1;
+
+    for (const char* p = haystack; *p; p++) {
+        if (_strnicmp(p, needle, needleLen) == 0) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+int ProcessNameMatchesAny(const char* processName, const char* const* names, int count) {
+    if (!processName) return 0;
+
+    for (int i = 0; i < count; i++) {
+        if (_stricmp(processName, names[i]) == 0) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+int IsKnownBrowserProcess(const char* processName) {
+    static const char* const browserProcesses[] = {
+        "chrome.exe",
+        "msedge.exe",
+        "firefox.exe",
+        "brave.exe",
+        "opera.exe",
+        "opera_gx.exe",
+        "vivaldi.exe",
+        "arc.exe",
+        "thorium.exe",
+        "zen.exe"
+    };
+
+    return ProcessNameMatchesAny(
+        processName,
+        browserProcesses,
+        (int)(sizeof(browserProcesses) / sizeof(browserProcesses[0]))
+    );
+}
+
+// Known VIDEO player processes. Audio-only apps (Spotify, iTunes, etc.) are
+// intentionally excluded: music playback does not keep the display on, so an
+// open music player should not block the screen saver on its monitor. Video
+// players are still gated by an active-audio check before they count as media.
+int IsKnownMediaProcess(const char* processName) {
+    static const char* const mediaProcesses[] = {
+        "vlc.exe",
+        "mpv.exe",
+        "mpvnet.exe",
+        "potplayer.exe",
+        "potplayermini.exe",
+        "potplayermini64.exe",
+        "wmplayer.exe",
+        "mpc-hc.exe",
+        "mpc-hc64.exe",
+        "mpc-be.exe",
+        "mpc-be64.exe",
+        "kodi.exe",
+        "plex.exe",
+        "jellyfinmediaplayer.exe",
+        "embytheater.exe",
+        "video.ui.exe"
+    };
+
+    return ProcessNameMatchesAny(
+        processName,
+        mediaProcesses,
+        (int)(sizeof(mediaProcesses) / sizeof(mediaProcesses[0]))
+    );
+}
+
+// Title hints for VIDEO playback sites. Audio-only services (Spotify,
+// SoundCloud, Bandcamp, Apple Music) are excluded since music does not keep
+// the display on. "YouTube Music" is covered by the "YouTube" hint.
+int WindowTitleHasMediaHint(const char* title) {
+    static const char* const mediaTitleHints[] = {
+        "YouTube",
+        "Twitch",
+        "Netflix",
+        "Hulu",
+        "Disney+",
+        "Prime Video",
+        "Amazon Prime",
+        "HBO Max",
+        "Paramount+",
+        "Peacock",
+        "Crunchyroll",
+        "Vimeo",
+        "Dailymotion",
+        "Plex",
+        "Jellyfin",
+        "Emby",
+        "Media Player",
+        "VLC media player",
+        "Picture in picture"
+    };
+
+    if (!title || title[0] == '\0') return 0;
+
+    for (int i = 0; i < (int)(sizeof(mediaTitleHints) / sizeof(mediaTitleHints[0])); i++) {
+        if (ContainsIgnoreCase(title, mediaTitleHints[i])) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+// Returns 1 if the (processName, title) pair looks like a media-playing window,
+// 0 otherwise. Known media players always count; browsers count only with a
+// video-site title hint; any other process counts only with a title hint.
+int IsMediaCandidateWindow(const char* processName, const char* title) {
+    if (IsKnownMediaProcess(processName)) {
+        return 1;
+    }
+
+    if (IsKnownBrowserProcess(processName)) {
+        return WindowTitleHasMediaHint(title) ? 1 : 0;
+    }
+
+    return WindowTitleHasMediaHint(title) ? 1 : 0;
+}
+
+int IsWindowCloakedCompat(HWND hWnd) {
+    DWORD cloaked = 0;
+    HRESULT hr = DwmGetWindowAttribute(hWnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked));
+    return SUCCEEDED(hr) && cloaked != 0;
+}
+
+// Get the process name (e.g., "brave.exe") from a process ID.
+// Uses QueryFullProcessImageNameW (needs only PROCESS_QUERY_LIMITED_INFORMATION)
+// instead of GetModuleBaseNameA (needs PROCESS_VM_READ, which sandboxed
+// Chromium renderer processes deny). Returns 1 on success, 0 on failure.
+int GetProcessNameFromPid(DWORD pid, char* buffer, int bufferSize) {
+    if (!buffer || bufferSize <= 0 || pid == 0) return 0;
+
+    HANDLE hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!hProcess) return 0;
+
+    WCHAR wpath[MAX_PATH] = {0};
+    DWORD wpathLen = MAX_PATH;
+    BOOL ok = QueryFullProcessImageNameW(hProcess, 0, wpath, &wpathLen);
+    CloseHandle(hProcess);
+
+    if (!ok || wpathLen == 0) return 0;
+
+    // Extract filename from full path (e.g. "C:\...\brave.exe" -> "brave.exe")
+    WCHAR* wexe = wpath;
+    for (WCHAR* p = wpath; *p; p++) {
+        if (*p == L'\\') wexe = p + 1;
+    }
+
+    // Convert to narrow char (exe names are ASCII)
+    int i = 0;
+    for (; wexe[i] && i < bufferSize - 1; i++) {
+        buffer[i] = (char)wexe[i];
+    }
+    buffer[i] = '\0';
+
+    return buffer[0] != '\0' ? 1 : 0;
+}
+
+// Context passed to EnumMediaWindowCallback. Carries the per-monitor media
+// flags being built plus the set of process names currently emitting audio.
+// We match by name (not PID) because Chromium browsers (Chrome/Brave/Edge/etc.)
+// run multi-process: the audio session's PID is the renderer process, while the
+// browser window is owned by the main process. Both share the same exe name, so
+// name matching bridges the gap. Single-process players (VLC, mpv) match too.
+typedef struct {
+    int mediaOnMonitor[MAX_MONITOR_COUNT];
+    char audioActiveProcessNames[MAX_ACTIVE_AUDIO_PIDS][MAX_PATH];
+    int audioActiveProcessNameCount;
+} MediaEnumContext;
+
+int IsAudioActiveProcessName(const MediaEnumContext* ctx, const char* processName) {
+    if (!processName || !ctx) return 0;
+    for (int i = 0; i < ctx->audioActiveProcessNameCount; i++) {
+        if (_stricmp(ctx->audioActiveProcessNames[i], processName) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// Collect exe names of processes with an ACTIVE audio session on the default
+// render endpoint. Returns the count filled into names[] (0 on any failure,
+// which causes the caller's safe fallback to block all enabled monitors).
+int CollectActiveAudioProcessNames(char names[][MAX_PATH], int maxNames) {
+    if (!names || maxNames <= 0) return 0;
+
+    IMMDeviceEnumerator* pEnum = NULL;
+    IMMDevice* pDevice = NULL;
+    IAudioSessionManager2* pSessionManager = NULL;
+    IAudioSessionEnumerator* pSessionEnum = NULL;
+    int count = 0;
+
+    HRESULT hr = CoCreateInstance(&CLSID_MMDeviceEnumerator, NULL, CLSCTX_ALL,
+                                  &IID_IMMDeviceEnumerator, (void**)&pEnum);
+    if (FAILED(hr) || !pEnum) {
+        LogMessage("Audio: CoCreateInstance failed hr=0x%08X", (unsigned)hr);
+        goto done;
+    }
+
+    hr = pEnum->lpVtbl->GetDefaultAudioEndpoint(pEnum, eRender, eConsole, &pDevice);
+    if (FAILED(hr) || !pDevice) {
+        LogMessage("Audio: GetDefaultAudioEndpoint(eRender,eConsole) failed hr=0x%08X", (unsigned)hr);
+        goto done;
+    }
+
+    hr = pDevice->lpVtbl->Activate(pDevice, &IID_IAudioSessionManager2,
+                                   CLSCTX_ALL, NULL, (void**)&pSessionManager);
+    if (FAILED(hr) || !pSessionManager) {
+        LogMessage("Audio: Activate(IAudioSessionManager2) failed hr=0x%08X", (unsigned)hr);
+        goto done;
+    }
+
+    hr = pSessionManager->lpVtbl->GetSessionEnumerator(pSessionManager, &pSessionEnum);
+    if (FAILED(hr) || !pSessionEnum) {
+        LogMessage("Audio: GetSessionEnumerator failed hr=0x%08X", (unsigned)hr);
+        goto done;
+    }
+
+    int sessionCount = 0;
+    pSessionEnum->lpVtbl->GetCount(pSessionEnum, &sessionCount);
+
+    for (int i = 0; i < sessionCount && count < maxNames; i++) {
+        IAudioSessionControl* pControl = NULL;
+        if (FAILED(pSessionEnum->lpVtbl->GetSession(pSessionEnum, i, &pControl)) || !pControl) {
+            continue;
+        }
+
+        AudioSessionState state = AudioSessionStateInactive;
+        pControl->lpVtbl->GetState(pControl, &state);
+
+        if (state == AudioSessionStateActive) {
+            IAudioSessionControl2* pControl2 = NULL;
+            if (SUCCEEDED(pControl->lpVtbl->QueryInterface(pControl, &IID_IAudioSessionControl2, (void**)&pControl2)) && pControl2) {
+                DWORD pid = 0;
+                if (SUCCEEDED(pControl2->lpVtbl->GetProcessId(pControl2, &pid)) && pid != 0) {
+                    char procName[MAX_PATH] = {0};
+                    if (GetProcessNameFromPid(pid, procName, sizeof(procName))) {
+                        int found = 0;
+                        for (int j = 0; j < count; j++) {
+                            if (_stricmp(names[j], procName) == 0) { found = 1; break; }
+                        }
+                        if (!found) {
+                            strncpy(names[count], procName, MAX_PATH - 1);
+                            names[count][MAX_PATH - 1] = '\0';
+                            count++;
+                        }
+                    }
+                }
+                pControl2->lpVtbl->Release(pControl2);
+            }
+        }
+        pControl->lpVtbl->Release(pControl);
+    }
+
+done:
+    if (pSessionEnum) pSessionEnum->lpVtbl->Release(pSessionEnum);
+    if (pSessionManager) pSessionManager->lpVtbl->Release(pSessionManager);
+    if (pDevice) pDevice->lpVtbl->Release(pDevice);
+    if (pEnum) pEnum->lpVtbl->Release(pEnum);
+    return count;
+}
+
+LONGLONG RectArea(const RECT* rect) {
+    LONG width = rect->right - rect->left;
+    LONG height = rect->bottom - rect->top;
+
+    if (width <= 0 || height <= 0) {
+        return 0;
+    }
+
+    return (LONGLONG)width * (LONGLONG)height;
+}
+
+LONGLONG RectIntersectionArea(const RECT* a, const RECT* b) {
+    LONG left = a->left > b->left ? a->left : b->left;
+    LONG top = a->top > b->top ? a->top : b->top;
+    LONG right = a->right < b->right ? a->right : b->right;
+    LONG bottom = a->bottom < b->bottom ? a->bottom : b->bottom;
+
+    if (right <= left || bottom <= top) {
+        return 0;
+    }
+
+    return (LONGLONG)(right - left) * (LONGLONG)(bottom - top);
+}
+
+// Prefer DWM's extended frame bounds (accounts for invisible drop-shadow borders);
+// fall back to GetWindowRect if DWM query fails.
+int GetVisibleWindowRect(HWND hWnd, RECT* rect) {
+    RECT frameRect;
+    HRESULT hr = DwmGetWindowAttribute(hWnd, DWMWA_EXTENDED_FRAME_BOUNDS, &frameRect, sizeof(frameRect));
+    if (SUCCEEDED(hr) && RectArea(&frameRect) > 0) {
+        *rect = frameRect;
+        return 1;
+    }
+
+    return GetWindowRect(hWnd, rect) != 0;
+}
+
+void MarkMediaWindowMonitors(MediaEnumContext* ctx, const RECT* windowRect) {
+    LONGLONG windowArea = RectArea(windowRect);
+
+    if (windowArea < MIN_MEDIA_WINDOW_AREA) {
+        return;
+    }
+
+    int marked = 0;
+    for (int i = 0; i < g_monitorCount; i++) {
+        LONGLONG intersectionArea = RectIntersectionArea(windowRect, &g_monitors[i].rect);
+        double overlapRatio = (double)intersectionArea / (double)windowArea;
+        if (intersectionArea >= MIN_MEDIA_WINDOW_AREA && overlapRatio >= MIN_MEDIA_WINDOW_OVERLAP_RATIO) {
+            ctx->mediaOnMonitor[i] = 1;
+            marked = 1;
+        }
+    }
+
+    if (!marked) {
+        int monitorIndex = GetMonitorIndexFromRect(*windowRect);
+        if (monitorIndex >= 0 && monitorIndex < g_monitorCount) {
+            ctx->mediaOnMonitor[monitorIndex] = 1;
+        }
+    }
+}
+
+BOOL CALLBACK EnumMediaWindowCallback(HWND hWnd, LPARAM lParam) {
+    MediaEnumContext* ctx = (MediaEnumContext*)lParam;
+
+    if (!IsWindowVisible(hWnd) || IsIconic(hWnd) || IsWindowCloakedCompat(hWnd)) {
+        return TRUE;
+    }
+
+    LONG_PTR exStyle = GetWindowLongPtr(hWnd, GWL_EXSTYLE);
+    if ((exStyle & WS_EX_TOOLWINDOW) != 0) {
+        return TRUE;
+    }
+
+    RECT rect;
+    if (!GetVisibleWindowRect(hWnd, &rect)) {
+        return TRUE;
+    }
+
+    if (RectArea(&rect) <= 0) {
+        return TRUE;
+    }
+
+    char processName[MAX_PATH] = {0};
+    if (!GetProcessNameFromHwnd(hWnd, processName, sizeof(processName))) {
+        return TRUE;
+    }
+
+    // A window only counts as media if its process is actually emitting audio.
+    // We match by exe name (not PID) because Chromium browsers run multi-process:
+    // the audio session belongs to the renderer process, while the window belongs
+    // to the main process — both share the same exe name. This also handles
+    // single-process players (VLC, mpv) where name match == PID match.
+    if (!IsAudioActiveProcessName(ctx, processName)) {
+        return TRUE;
+    }
+
+    char title[512] = {0};
+    GetWindowTextA(hWnd, title, sizeof(title));
+
+    if (!IsMediaCandidateWindow(processName, title)) {
+        return TRUE;
+    }
+
+    MarkMediaWindowMonitors(ctx, &rect);
+    return TRUE;
+}
+
+// Fills mediaOnMonitor[] with 1 for each monitor hosting a visible media window.
+// Uses the cheap ES_DISPLAY_REQUIRED gate to skip enumeration when nothing is
+// playing, and caches the scan for MEDIA_DETECTION_CACHE_MS to keep the timer
+// light. Returns 1 if any monitor has media. If media is playing globally but
+// no candidate window maps to a monitor, falls back to blocking all enabled
+// monitors (safe default so unknown apps are never covered).
+int UpdateMediaMonitorStates(int mediaOnMonitor[MAX_MONITOR_COUNT]) {
+    static DWORD lastLoggedMask = (DWORD)-1;
+    static DWORD lastScanTick = 0;
+    static int hasCachedState = 0;
+    static int cachedAnyMedia = 0;
+    static int cachedMediaOnMonitor[MAX_MONITOR_COUNT] = {0};
+
+    for (int i = 0; i < MAX_MONITOR_COUNT; i++) {
+        mediaOnMonitor[i] = 0;
+    }
+
+    if (!g_app.config.mediaDetectionEnabled) {
+        hasCachedState = 0;
+        if (lastLoggedMask != 0) {
+            LogMessage("Media monitor detection: disabled");
+            lastLoggedMask = 0;
+        }
+        return 0;
+    }
+
+    DWORD nowTick = GetTickCount();
+    if (hasCachedState && (DWORD)(nowTick - lastScanTick) < MEDIA_DETECTION_CACHE_MS) {
+        for (int i = 0; i < MAX_MONITOR_COUNT; i++) {
+            mediaOnMonitor[i] = cachedMediaOnMonitor[i];
+        }
+        return cachedAnyMedia;
+    }
+
+    lastScanTick = nowTick;
+
+    int globalMediaPlaying = IsMediaPlaying();
+
+    if (!globalMediaPlaying) {
+        for (int i = 0; i < MAX_MONITOR_COUNT; i++) {
+            cachedMediaOnMonitor[i] = 0;
+        }
+        hasCachedState = 1;
+        cachedAnyMedia = 0;
+
+        if (lastLoggedMask != 0) {
+            LogMessage("Media monitor detection: no active media monitors");
+            lastLoggedMask = 0;
+        }
+        return 0;
+    }
+
+    int localMediaOnMonitor[MAX_MONITOR_COUNT] = {0};
+    MediaEnumContext ctx = {0};
+    ctx.audioActiveProcessNameCount = CollectActiveAudioProcessNames(
+        ctx.audioActiveProcessNames, MAX_ACTIVE_AUDIO_PIDS);
+    EnumWindows(EnumMediaWindowCallback, (LPARAM)&ctx);
+
+    int mappedMonitorCount = 0;
+    for (int i = 0; i < g_monitorCount; i++) {
+        if (ctx.mediaOnMonitor[i]) {
+            localMediaOnMonitor[i] = 1;
+            mediaOnMonitor[i] = 1;
+            mappedMonitorCount++;
+        }
+    }
+
+    int usedGlobalFallback = 0;
+    if (mappedMonitorCount == 0) {
+        // Windows reports media playback but no candidate window with active
+        // audio maps to a monitor (muted video / unknown app / audio routed to
+        // a non-default device / minimized player). Conservatively block all
+        // enabled monitors to avoid covering playback. This matches the prior
+        // global behavior, so there is no regression for muted-video cases.
+        for (int i = 0; i < g_monitorCount; i++) {
+            if (g_monitorStates[i].enabled) {
+                mediaOnMonitor[i] = 1;
+            }
+        }
+        usedGlobalFallback = 1;
+    }
+
+    DWORD mask = 0;
+    for (int i = 0; i < g_monitorCount && i < 32; i++) {
+        if (mediaOnMonitor[i]) {
+            mask |= (1u << i);
+        }
+    }
+
+    hasCachedState = 1;
+    cachedAnyMedia = mask != 0;
+    for (int i = 0; i < MAX_MONITOR_COUNT; i++) {
+        cachedMediaOnMonitor[i] = mediaOnMonitor[i];
+    }
+
+    if (mask != lastLoggedMask) {
+        LogMessage("Media monitor detection: mask=0x%08X (activeAudioNames=%d, fallback=%d)",
+                   mask, ctx.audioActiveProcessNameCount, usedGlobalFallback);
+        lastLoggedMask = mask;
+    }
+
+    return cachedAnyMedia;
 }
 
 // Check if a Windows shell overlay window (Start Menu, Task View, Action Center) is open
@@ -1219,6 +1733,11 @@ void ShowSettingsDialog() {
                      margin, y, checkboxWidth, controlHeight, g_hSettingsDialog, (HMENU)IDC_PERMONITOR_CHECK, hMod, NULL);
         y += rowHeight + ScaleDPI(5);
 
+        HWND hPerMonitorMediaCheck = CreateWindowA("BUTTON", "Per-Monitor Media Detection",
+                     WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                     margin, y, checkboxWidth, controlHeight, g_hSettingsDialog, (HMENU)IDC_PERMONITOR_MEDIA_CHECK, hMod, NULL);
+        y += rowHeight + ScaleDPI(5);
+
         HWND hMonitorsLabel = CreateWindowA("STATIC", "Monitors:",
                      WS_CHILD | WS_VISIBLE,
                      margin, y, ScaleDPI(100), controlHeight, g_hSettingsDialog, NULL, hMod, NULL);
@@ -1275,6 +1794,7 @@ void ShowSettingsDialog() {
             SendMessageA(hDebugCheck, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
             SendMessageA(hStartupCheck, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
             SendMessageA(hPerMonitorCheck, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
+            SendMessageA(hPerMonitorMediaCheck, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
             SendMessageA(hPixelShiftLabel, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
             SendMessageA(hPixelShiftEdit, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
             SendMessageA(hPixelShiftUpDown, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
@@ -1297,6 +1817,8 @@ void ShowSettingsDialog() {
                    "Automatically start OLED Aegis when you log into Windows.");
         AddTooltip(g_hSettingsDialog, hPerMonitorCheck,
                    "Track input separately for each monitor. Allows screen saver to activate on unused monitors while you continue using others.");
+        AddTooltip(g_hSettingsDialog, hPerMonitorMediaCheck,
+                   "Detect media playback per monitor instead of globally. Only blocks the screen saver on the monitor where media is actually playing, so playback on a non-OLED display won't keep the OLED awake.");
         AddTooltip(g_hSettingsDialog, hPixelShiftEdit,
                    "Expand the screen saver window beyond the monitor bounds by this many pixels on each side. "
                    "Use 4-8 on QD-OLED panels (e.g. Alienware) to prevent hardware pixel shift from exposing the desktop edge. (0 = disabled)");
@@ -1313,6 +1835,7 @@ void ShowSettingsDialog() {
         CheckDlgButton(g_hSettingsDialog, IDC_DEBUG_CHECK, g_app.config.debugMode ? BST_CHECKED : BST_UNCHECKED);
         CheckDlgButton(g_hSettingsDialog, IDC_STARTUP_CHECK, g_app.config.startupEnabled ? BST_CHECKED : BST_UNCHECKED);
         CheckDlgButton(g_hSettingsDialog, IDC_PERMONITOR_CHECK, g_app.config.perMonitorInputDetection ? BST_CHECKED : BST_UNCHECKED);
+        CheckDlgButton(g_hSettingsDialog, IDC_PERMONITOR_MEDIA_CHECK, g_app.config.perMonitorMediaDetection ? BST_CHECKED : BST_UNCHECKED);
 
         sprintf_s(buffer, 32, "%d", g_app.config.pixelShiftCompensation);
         SetDlgItemTextA(g_hSettingsDialog, IDC_PIXELSHIFT_EDIT, buffer);
@@ -1343,11 +1866,13 @@ void ApplySettings(HWND hWnd) {
     int oldDebug = g_app.config.debugMode;
     int oldStartup = g_app.config.startupEnabled;
     int oldPerMonitor = g_app.config.perMonitorInputDetection;
+    int oldPerMonitorMedia = g_app.config.perMonitorMediaDetection;
 
     g_app.config.mediaDetectionEnabled = IsDlgButtonChecked(hWnd, IDC_MEDIA_CHECK) == BST_CHECKED;
     g_app.config.debugMode = IsDlgButtonChecked(hWnd, IDC_DEBUG_CHECK) == BST_CHECKED;
     g_app.config.startupEnabled = IsDlgButtonChecked(hWnd, IDC_STARTUP_CHECK) == BST_CHECKED;
     g_app.config.perMonitorInputDetection = IsDlgButtonChecked(hWnd, IDC_PERMONITOR_CHECK) == BST_CHECKED;
+    g_app.config.perMonitorMediaDetection = IsDlgButtonChecked(hWnd, IDC_PERMONITOR_MEDIA_CHECK) == BST_CHECKED;
 
     GetDlgItemTextA(hWnd, IDC_PIXELSHIFT_EDIT, buffer, 32);
     int newPixelShift = atoi(buffer);
@@ -1392,13 +1917,14 @@ void ApplySettings(HWND hWnd) {
     SaveConfig();
     UpdateStartupRegistry();
 
-    LogMessage("Settings applied: timeout %ds->%ds, interval %dms->%dms, media %d->%d, debug %d->%d, startup %d->%d, perMonitor %d->%d, pixelShift %dpx",
+    LogMessage("Settings applied: timeout %ds->%ds, interval %dms->%dms, media %d->%d, debug %d->%d, startup %d->%d, perMonitor %d->%d, perMonitorMedia %d->%d, pixelShift %dpx",
              oldTimeout, g_app.config.idleTimeout,
              oldInterval, g_app.config.checkInterval,
              oldMedia, g_app.config.mediaDetectionEnabled,
              oldDebug, g_app.config.debugMode,
              oldStartup, g_app.config.startupEnabled,
              oldPerMonitor, g_app.config.perMonitorInputDetection,
+             oldPerMonitorMedia, g_app.config.perMonitorMediaDetection,
              g_app.config.pixelShiftCompensation);
 
     if (oldInterval != g_app.config.checkInterval) {
@@ -1461,6 +1987,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
             g_app.config.startupEnabled = 0;
             g_app.config.debugMode = 0;
             g_app.config.perMonitorInputDetection = 0;
+            g_app.config.perMonitorMediaDetection = 1;
             for (int i = 0; i < MAX_MONITOR_COUNT; i++) {
                 g_app.config.monitorsEnabled[i] = 1;
             }
@@ -1511,7 +2038,15 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
                 if (g_app.config.perMonitorInputDetection) {
                     DWORD idleTime = GetIdleTime();
                     time_t now = time(NULL);
-                    int mediaPlaying = IsMediaPlaying();
+
+                    int usePerMonitorMedia = (g_app.config.perMonitorMediaDetection && g_app.config.mediaDetectionEnabled);
+                    int mediaOnMonitor[MAX_MONITOR_COUNT] = {0};
+                    int mediaPlaying = 0;
+                    if (usePerMonitorMedia) {
+                        UpdateMediaMonitorStates(mediaOnMonitor);
+                    } else {
+                        mediaPlaying = IsMediaPlaying();
+                    }
 
                     int inManualCooldown = 0;
                     if (g_app.isManualActivation) {
@@ -1558,14 +2093,18 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
                         if (!g_monitorStates[i].enabled) continue;
 
                         int idleSeconds = (int)(now - g_monitorStates[i].lastInputTime);
+                        int monitorHasMedia = usePerMonitorMedia ? mediaOnMonitor[i] : mediaPlaying;
 
-                        if (!mediaPlaying && idleSeconds >= g_app.config.idleTimeout) {
+                        if (!monitorHasMedia && idleSeconds >= g_app.config.idleTimeout) {
                             if (!g_monitorStates[i].screenSaverActive) {
                                 LogMessage("Timer: Activating screen saver on monitor %d (idle: %ds)", i, idleSeconds);
                                 ShowScreenSaverOnMonitor(i, 0);
                             }
                         } else if (g_monitorStates[i].screenSaverActive && !inManualCooldown) {
-                            if (idleSeconds < IDLE_DEACTIVATE_THRESHOLD_SEC) {
+                            if (monitorHasMedia) {
+                                LogMessage("Timer: Deactivating screen saver on monitor %d (media detected)", i);
+                                HideScreenSaverOnMonitor(i);
+                            } else if (idleSeconds < IDLE_DEACTIVATE_THRESHOLD_SEC) {
                                 LogMessage("Timer: Deactivating screen saver on monitor %d (input detected)", i);
                                 HideScreenSaverOnMonitor(i);
                             }
@@ -1598,32 +2137,87 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
                     UpdateTrayIcon(IsAnyMonitorActive() ? 1 : 0);
                 } else {
                     DWORD idleTime = GetIdleTime();
-                    int mediaPlaying = IsMediaPlaying();
 
-                    if (!mediaPlaying && idleTime > (DWORD)(g_app.config.idleTimeout * 1000)) {
-                        if (!g_app.screenSaverActive) {
-                            LogMessage("Timer: Activating screen saver (idle: %lums)", idleTime);
-                            ShowScreenSaver(0);
-                            UpdateTrayIcon(1);
+                    if (g_app.config.perMonitorMediaDetection && g_app.config.mediaDetectionEnabled) {
+                        // Per-monitor media: activate on monitors without media,
+                        // deactivate on monitors where media is detected.
+                        int mediaOnMonitor[MAX_MONITOR_COUNT] = {0};
+                        UpdateMediaMonitorStates(mediaOnMonitor);
+
+                        if (idleTime > (DWORD)(g_app.config.idleTimeout * 1000)) {
+                            for (int i = 0; i < g_monitorCount; i++) {
+                                if (!g_monitorStates[i].enabled) continue;
+
+                                if (mediaOnMonitor[i]) {
+                                    if (g_monitorStates[i].screenSaverActive) {
+                                        LogMessage("Timer: Deactivating screen saver on monitor %d (media detected)", i);
+                                        HideScreenSaverOnMonitor(i);
+                                    }
+                                } else if (!g_monitorStates[i].screenSaverActive) {
+                                    LogMessage("Timer: Activating screen saver on monitor %d (idle: %lums)", i, idleTime);
+                                    ShowScreenSaverOnMonitor(i, 0);
+                                }
+                            }
+
+                            g_app.screenSaverActive = IsAnyMonitorActive() ? 1 : 0;
+
+                            if (!g_app.screenSaverActive && g_app.cursorHidden) {
+                                ShowCursor(TRUE);
+                                g_app.cursorHidden = 0;
+                                LogMessage("Cursor restored (no active monitors)");
+                            }
+
+                            UpdateTrayIcon(g_app.screenSaverActive);
+                        } else {
+                            // User is active: deactivate everything (preserve manual cooldown logic)
+                            if (g_app.screenSaverActive) {
+                                if (g_app.isManualActivation) {
+                                    DWORD timeSinceActivation = GetTickCount() - g_app.manualActivationTime;
+                                    if (timeSinceActivation < MANUAL_ACTIVATION_COOLDOWN_MS) {
+                                        LogMessage("Timer: Skipping deactivation (manual cooldown: %lums/%dms)",
+                                                 timeSinceActivation, MANUAL_ACTIVATION_COOLDOWN_MS);
+                                    } else {
+                                        if (idleTime < IDLE_DEACTIVATE_THRESHOLD_MS) {
+                                            LogMessage("Timer: Deactivating screen saver (new input detected after cooldown)");
+                                            HideScreenSaver();
+                                            UpdateTrayIcon(0);
+                                        }
+                                    }
+                                } else {
+                                    LogMessage("Timer: Deactivating screen saver (idle: %lums)", idleTime);
+                                    HideScreenSaver();
+                                    UpdateTrayIcon(0);
+                                }
+                            }
                         }
                     } else {
-                        if (g_app.screenSaverActive) {
-                            if (g_app.isManualActivation) {
-                                DWORD timeSinceActivation = GetTickCount() - g_app.manualActivationTime;
-                                if (timeSinceActivation < MANUAL_ACTIVATION_COOLDOWN_MS) {
-                                    LogMessage("Timer: Skipping deactivation (manual cooldown: %lums/%dms)",
-                                             timeSinceActivation, MANUAL_ACTIVATION_COOLDOWN_MS);
-                                } else {
-                                    if (idleTime < IDLE_DEACTIVATE_THRESHOLD_MS) {
-                                        LogMessage("Timer: Deactivating screen saver (new input detected after cooldown)");
-                                        HideScreenSaver();
-                                        UpdateTrayIcon(0);
+                        int mediaPlaying = IsMediaPlaying();
+
+                        if (!mediaPlaying && idleTime > (DWORD)(g_app.config.idleTimeout * 1000)) {
+                            if (!g_app.screenSaverActive) {
+                                LogMessage("Timer: Activating screen saver (idle: %lums)", idleTime);
+                                ShowScreenSaver(0);
+                                UpdateTrayIcon(1);
+                            }
+                        } else {
+                            if (g_app.screenSaverActive) {
+                                if (g_app.isManualActivation) {
+                                    DWORD timeSinceActivation = GetTickCount() - g_app.manualActivationTime;
+                                    if (timeSinceActivation < MANUAL_ACTIVATION_COOLDOWN_MS) {
+                                        LogMessage("Timer: Skipping deactivation (manual cooldown: %lums/%dms)",
+                                                 timeSinceActivation, MANUAL_ACTIVATION_COOLDOWN_MS);
+                                    } else {
+                                        if (idleTime < IDLE_DEACTIVATE_THRESHOLD_MS) {
+                                            LogMessage("Timer: Deactivating screen saver (new input detected after cooldown)");
+                                            HideScreenSaver();
+                                            UpdateTrayIcon(0);
+                                        }
                                     }
+                                } else {
+                                    LogMessage("Timer: Deactivating screen saver (idle: %lums, media: %d)", idleTime, mediaPlaying);
+                                    HideScreenSaver();
+                                    UpdateTrayIcon(0);
                                 }
-                            } else {
-                                LogMessage("Timer: Deactivating screen saver (idle: %lums, media: %d)", idleTime, mediaPlaying);
-                                HideScreenSaver();
-                                UpdateTrayIcon(0);
                             }
                         }
                     }
@@ -1784,6 +2378,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
     SetProcessDPIAware();
 
+    HRESULT hrCom = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+    // hrCom may be S_OK or S_FALSE (already initialized); either is fine to proceed.
+
     g_uTaskbarRestart = RegisterWindowMessageW(L"TaskbarCreated");
 
     WNDCLASSW wc = {0};
@@ -1799,6 +2396,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     while (GetMessage(&msg, NULL, 0, 0)) {
         TranslateMessage(&msg);
         DispatchMessage(&msg);
+    }
+
+    if (SUCCEEDED(hrCom)) {
+        CoUninitialize();
     }
 
     return (int)msg.wParam;
