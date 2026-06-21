@@ -11,6 +11,7 @@
 #include <dwmapi.h>
 #include <mmdeviceapi.h>
 #include <audiopolicy.h>
+#include <endpointvolume.h>
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "powrprof.lib")
 #pragma comment(lib, "psapi.lib")
@@ -25,6 +26,7 @@ DEFINE_GUID(CLSID_MMDeviceEnumerator,     0xBCDE0395, 0xE52F, 0x467C, 0x8E, 0x3D
 DEFINE_GUID(IID_IMMDeviceEnumerator,      0xA95664D2, 0x9614, 0x4F35, 0xA7, 0x46, 0xDE, 0x8D, 0xB6, 0x36, 0x17, 0xE6);
 DEFINE_GUID(IID_IAudioSessionManager2,    0x77AA99A0, 0x1BD6, 0x484F, 0x8B, 0xC7, 0x2C, 0x65, 0x4C, 0x9A, 0x9B, 0x6F);
 DEFINE_GUID(IID_IAudioSessionControl2,    0xBFB7FF88, 0x7239, 0x4FC9, 0x8F, 0xA2, 0x07, 0xC9, 0x50, 0xBE, 0x9C, 0x6D);
+DEFINE_GUID(IID_IAudioMeterInformation,   0xC02216F6, 0x8C67, 0x4B5B, 0x9D, 0x00, 0xD0, 0x08, 0xE7, 0x3E, 0x00, 0x64);
 
 #define APP_NAME L"OLED Aegis"
 #define WM_TRAYICON (WM_USER + 1)
@@ -39,35 +41,36 @@ DEFINE_GUID(IID_IAudioSessionControl2,    0xBFB7FF88, 0x7239, 0x4FC9, 0x8F, 0xA2
 #define IDI_ICON_INACTIVE 102
 
 // Settings dialog control IDs
-#define IDC_TIMEOUT_EDIT        1001
-#define IDC_MEDIA_CHECK         1002
-#define IDC_DEBUG_CHECK         1003
-#define IDC_STARTUP_CHECK       1004
-#define IDC_APPLY_BTN           1005
-#define IDC_CONFIG_BTN          1006
-#define IDC_CLOSE_BTN           1007
-#define IDC_INTERVAL_EDIT       1008
-#define IDC_PERMONITOR_CHECK    1009
-#define IDC_PERMONITOR_MEDIA_CHECK 1011
-#define IDC_PIXELSHIFT_EDIT     1010
-#define IDC_MONITOR_BASE        2000  // Monitor checkboxes: IDC_MONITOR_BASE + index
+#define IDC_TIMEOUT_EDIT            1001
+#define IDC_MEDIA_CHECK             1002
+#define IDC_DEBUG_CHECK             1003
+#define IDC_STARTUP_CHECK           1004
+#define IDC_APPLY_BTN               1005
+#define IDC_CONFIG_BTN              1006
+#define IDC_CLOSE_BTN               1007
+#define IDC_INTERVAL_EDIT           1008
+#define IDC_PERMONITOR_CHECK        1009
+#define IDC_PERMONITOR_MEDIA_CHECK  1011
+#define IDC_PIXELSHIFT_EDIT         1010
+#define IDC_MONITOR_BASE            2000  // Monitor checkboxes: IDC_MONITOR_BASE + index
 
 // Tray context menu command IDs
 #define IDM_SETTINGS            1
 #define IDM_EXIT                2
 
 // Timing constants
-#define INPUT_IGNORE_DELAY_MS       500     // Delay after screen saver window creation to ignore input
-#define IDLE_ACTIVITY_THRESHOLD_MS  1000    // Time threshold to consider user active (1 second)
-#define IDLE_DEACTIVATE_THRESHOLD_MS 2000   // Time threshold to deactivate screen saver after input
-#define IDLE_DEACTIVATE_THRESHOLD_SEC 2     // Time threshold in seconds (for per-monitor mode)
-#define SHELL_CLOSE_DELAY_MS        250     // Delay after sending Escape to close shell windows
-#define SHELL_CLOSE_MAX_ATTEMPTS    2       // Maximum attempts to close shell windows
-#define MIN_MEDIA_WINDOW_AREA       10000   // Ignore tiny windows when mapping media to monitors
-#define MIN_MEDIA_WINDOW_OVERLAP_RATIO 0.10 // Ignore thin window-border overlap onto adjacent monitors
-#define MEDIA_DETECTION_CACHE_MS    2000    // Cache media-window scans to keep timer work light
-#define MAX_ACTIVE_AUDIO_PIDS       64      // Upper bound on concurrently active audio sessions we track
-#define MAX_BROWSER_WINDOW_INFO     32      // Max browser windows to collect for diagnostic logging
+#define INPUT_IGNORE_DELAY_MS           500     // Delay after screen saver window creation to ignore input
+#define IDLE_ACTIVITY_THRESHOLD_MS      1000    // Time threshold to consider user active (1 second)
+#define IDLE_DEACTIVATE_THRESHOLD_MS    2000    // Time threshold to deactivate screen saver after input
+#define IDLE_DEACTIVATE_THRESHOLD_SEC   2       // Time threshold in seconds (for per-monitor mode)
+#define SHELL_CLOSE_DELAY_MS            250     // Delay after sending Escape to close shell windows
+#define SHELL_CLOSE_MAX_ATTEMPTS        2       // Maximum attempts to close shell windows
+#define MIN_MEDIA_WINDOW_AREA           10000   // Ignore tiny windows when mapping media to monitors
+#define MIN_MEDIA_WINDOW_OVERLAP_RATIO  0.10    // Ignore thin window-border overlap onto adjacent monitors
+#define MEDIA_DETECTION_CACHE_MS        2000    // Cache media-window scans to keep timer work light
+#define AUDIO_ACTIVE_PEAK_THRESHOLD     0.0001f // Ignore paused/silent sessions that remain "active"
+#define MAX_ACTIVE_AUDIO_PIDS           64      // Upper bound on concurrently active audio sessions we track
+#define MAX_BROWSER_WINDOW_INFO         32      // Max browser windows to collect for diagnostic logging
 
 // Check interval bounds (milliseconds)
 #define MIN_CHECK_INTERVAL_MS   250
@@ -1062,24 +1065,35 @@ int CollectActiveAudioProcessNames(char names[][MAX_PATH], int maxNames) {
         pControl->lpVtbl->GetState(pControl, &state);
 
         if (state == AudioSessionStateActive) {
-            IAudioSessionControl2* pControl2 = NULL;
-            if (SUCCEEDED(pControl->lpVtbl->QueryInterface(pControl, &IID_IAudioSessionControl2, (void**)&pControl2)) && pControl2) {
-                DWORD pid = 0;
-                if (SUCCEEDED(pControl2->lpVtbl->GetProcessId(pControl2, &pid)) && pid != 0) {
-                    char procName[MAX_PATH] = {0};
-                    if (GetProcessNameFromPid(pid, procName, sizeof(procName))) {
-                        int found = 0;
-                        for (int j = 0; j < count; j++) {
-                            if (_stricmp(names[j], procName) == 0) { found = 1; break; }
+            // AudioSessionStateActive can be true even when a video is paused
+            // (the session stays "active" but produces no sound). Use the peak
+            // meter to filter out silent sessions so paused video doesn't block
+            // the screen saver.
+            IAudioMeterInformation* pMeter = NULL;
+            if (SUCCEEDED(pControl->lpVtbl->QueryInterface(pControl, &IID_IAudioMeterInformation, (void**)&pMeter)) && pMeter) {
+                float peak = 0.0f;
+                if (SUCCEEDED(pMeter->lpVtbl->GetPeakValue(pMeter, &peak)) && peak > AUDIO_ACTIVE_PEAK_THRESHOLD) {
+                    IAudioSessionControl2* pControl2 = NULL;
+                    if (SUCCEEDED(pControl->lpVtbl->QueryInterface(pControl, &IID_IAudioSessionControl2, (void**)&pControl2)) && pControl2) {
+                        DWORD pid = 0;
+                        if (SUCCEEDED(pControl2->lpVtbl->GetProcessId(pControl2, &pid)) && pid != 0) {
+                            char procName[MAX_PATH] = {0};
+                            if (GetProcessNameFromPid(pid, procName, sizeof(procName))) {
+                                int found = 0;
+                                for (int j = 0; j < count; j++) {
+                                    if (_stricmp(names[j], procName) == 0) { found = 1; break; }
+                                }
+                                if (!found) {
+                                    strncpy(names[count], procName, MAX_PATH - 1);
+                                    names[count][MAX_PATH - 1] = '\0';
+                                    count++;
+                                }
+                            }
                         }
-                        if (!found) {
-                            strncpy(names[count], procName, MAX_PATH - 1);
-                            names[count][MAX_PATH - 1] = '\0';
-                            count++;
-                        }
+                        pControl2->lpVtbl->Release(pControl2);
                     }
                 }
-                pControl2->lpVtbl->Release(pControl2);
+                pMeter->lpVtbl->Release(pMeter);
             }
         }
         pControl->lpVtbl->Release(pControl);
