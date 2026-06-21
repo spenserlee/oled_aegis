@@ -153,6 +153,7 @@ typedef struct {
     int isShuttingDown;
     int cursorHidden;
     int trayMenuActive;
+    int trayIconActive;
     DWORD manualActivationTime;
     int isManualActivation;
 } AppState;
@@ -2072,9 +2073,15 @@ void ApplySettings(HWND hWnd) {
 }
 
 void UpdateTrayIcon(int active) {
+    active = active ? 1 : 0;
+    if (g_app.trayIconActive == active) {
+        return;
+    }
+
     g_app.nid.hIcon = active ? g_hIconActive : g_hIconInactive;
     lstrcpyA(g_app.nid.szTip, active ? "OLED Aegis - Active" : "OLED Aegis - Idle");
     Shell_NotifyIconA(NIM_MODIFY, (PNOTIFYICONDATAA)&g_app.nid);
+    g_app.trayIconActive = active;
 }
 
 // Handle WM_CREATE: initialize application state, tray icon, config, monitors,
@@ -2084,6 +2091,7 @@ int HandleCreation(HWND hWnd) {
     memset(&g_app, 0, sizeof(g_app));
     g_app.hWnd = hWnd;
     g_app.isShuttingDown = 0;
+    g_app.trayIconActive = -1;  // Force first UpdateTrayIcon call to fire
 
     g_hInstanceMutex = CreateMutexW(NULL, TRUE, L"OLEDAegis_SingleInstance");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
@@ -2387,6 +2395,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
         g_app.nid.hIcon = g_app.screenSaverActive ? g_hIconActive : g_hIconInactive;
         lstrcpyA(g_app.nid.szTip, g_app.screenSaverActive ? "OLED Aegis - Active" : "OLED Aegis - Idle");
         Shell_NotifyIconA(NIM_ADD, &g_app.nid);
+        g_app.trayIconActive = g_app.screenSaverActive ? 1 : 0;
         return 0;
     }
 
