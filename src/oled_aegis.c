@@ -67,6 +67,7 @@ DEFINE_GUID(IID_IAudioSessionControl2,    0xBFB7FF88, 0x7239, 0x4FC9, 0x8F, 0xA2
 #define MIN_MEDIA_WINDOW_OVERLAP_RATIO 0.10 // Ignore thin window-border overlap onto adjacent monitors
 #define MEDIA_DETECTION_CACHE_MS    2000    // Cache media-window scans to keep timer work light
 #define MAX_ACTIVE_AUDIO_PIDS       64      // Upper bound on concurrently active audio sessions we track
+#define MAX_BROWSER_WINDOW_INFO     32      // Max browser windows to collect for diagnostic logging
 
 // Check interval bounds (milliseconds)
 #define MIN_CHECK_INTERVAL_MS   250
@@ -975,6 +976,12 @@ typedef struct {
     int mediaOnMonitor[MAX_MONITOR_COUNT];
     char audioActiveProcessNames[MAX_ACTIVE_AUDIO_PIDS][MAX_PATH];
     int audioActiveProcessNameCount;
+    // Diagnostic info: all browser windows with active audio, collected during
+    // enumeration and logged once in UpdateMediaMonitorStates when the mask changes.
+    // This avoids per-tick log spam and shows both matching and non-matching windows.
+    char browserTitles[MAX_BROWSER_WINDOW_INFO][256];
+    int browserMatched[MAX_BROWSER_WINDOW_INFO];  // 1 = matched a hint, 0 = no hint
+    int browserWindowCount;
 } MediaEnumContext;
 
 int IsAudioActiveProcessName(const MediaEnumContext* ctx, const char* processName) {
@@ -1186,12 +1193,20 @@ BOOL CALLBACK EnumMediaWindowCallback(HWND hWnd, LPARAM lParam) {
     char title[512] = {0};
     GetWindowTextA(hWnd, title, sizeof(title));
 
-    if (!IsMediaCandidateWindow(processName, title)) {
-        // Log browser windows that have active audio but didn't match any video
-        // title hint. This helps identify sites that need hints added.
-        if (IsKnownBrowserProcess(processName) && title[0]) {
-            LogMessage("Media detection: browser with active audio but no title hint: '%.80s'", title);
-        }
+    int matched = IsMediaCandidateWindow(processName, title);
+
+    // Collect diagnostic info for all browser windows with active audio,
+    // regardless of whether they matched a hint. This is logged once in
+    // UpdateMediaMonitorStates when the mask changes, so the user can see
+    // ALL browser windows (including the one playing video) without per-tick spam.
+    if (IsKnownBrowserProcess(processName) && title[0] && ctx->browserWindowCount < MAX_BROWSER_WINDOW_INFO) {
+        int idx = ctx->browserWindowCount++;
+        strncpy(ctx->browserTitles[idx], title, 255);
+        ctx->browserTitles[idx][255] = '\0';
+        ctx->browserMatched[idx] = matched;
+    }
+
+    if (!matched) {
         return TRUE;
     }
 
@@ -1320,8 +1335,13 @@ int UpdateMediaMonitorStates(int mediaOnMonitor[MAX_MONITOR_COUNT]) {
     }
 
     if (mask != lastLoggedMask) {
-        LogMessage("Media monitor detection: mask=0x%08X (activeAudioNames=%d, fallback=%d, browserSkip=%d)",
-                   mask, ctx.audioActiveProcessNameCount, usedGlobalFallback, skippedFallbackForBrowser);
+        for (int i = 0; i < ctx.browserWindowCount; i++) {
+            LogMessage("Media detection: browser window %s: '%.120s'",
+                       ctx.browserMatched[i] ? "MATCHED  " : "no hint  ",
+                       ctx.browserTitles[i]);
+        }
+        LogMessage("Media monitor detection: mask=0x%08X (activeAudioNames=%d, fallback=%d, browserSkip=%d, browserWindows=%d)",
+                   mask, ctx.audioActiveProcessNameCount, usedGlobalFallback, skippedFallbackForBrowser, ctx.browserWindowCount);
         lastLoggedMask = mask;
     }
 
