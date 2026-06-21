@@ -69,6 +69,7 @@ DEFINE_GUID(IID_IAudioMeterInformation,   0xC02216F6, 0x8C67, 0x4B5B, 0x9D, 0x00
 #define MIN_MEDIA_WINDOW_OVERLAP_RATIO  0.10    // Ignore thin window-border overlap onto adjacent monitors
 #define MEDIA_DETECTION_CACHE_MS        2000    // Cache media-window scans to keep timer work light
 #define AUDIO_ACTIVE_PEAK_THRESHOLD     0.0001f // Ignore paused/silent sessions that remain "active"
+#define CURSOR_COUNTER_MAX_ATTEMPTS     16      // Safety bound when normalizing ShowCursor's counter
 #define MAX_ACTIVE_AUDIO_PIDS           64      // Upper bound on concurrently active audio sessions we track
 #define MAX_BROWSER_WINDOW_INFO         32      // Max browser windows to collect for diagnostic logging
 
@@ -150,6 +151,7 @@ typedef struct {
     int screenSaverActive;
     int isShuttingDown;
     int cursorHidden;
+    int trayMenuActive;
     DWORD manualActivationTime;
     int isManualActivation;
 } AppState;
@@ -170,6 +172,57 @@ static MonitorInfo g_monitors[MAX_MONITOR_COUNT];
 static MonitorState g_monitorStates[MAX_MONITOR_COUNT];
 static UINT g_uTaskbarRestart = 0;  // Registered "TaskbarCreated" message ID (0 if not registered)
 static int g_mediaCacheInvalidated = 0;  // Set by WM_POWERBROADCAST to force media cache refresh
+
+int IsAppUiActive() {
+    return g_app.trayMenuActive;
+}
+
+// Restore the cursor, handling ShowCursor's reference-counted nature. The
+// counter can drift if ShowCursor calls are missed (e.g. due to focus changes),
+// so we loop until the cursor is actually showing or we hit a safety bound.
+// Also checks GetCursorInfo as a fallback when the cursorHidden flag is wrong.
+void EnsureCursorVisible(const char* reason) {
+    int adjusted = 0;
+    int count = 0;
+
+    if (g_app.cursorHidden) {
+        do {
+            count = ShowCursor(TRUE);
+            adjusted++;
+        } while (count < 0 && adjusted < CURSOR_COUNTER_MAX_ATTEMPTS);
+
+        g_app.cursorHidden = 0;
+    } else {
+        CURSORINFO cursorInfo = {0};
+        cursorInfo.cbSize = sizeof(cursorInfo);
+        if (GetCursorInfo(&cursorInfo) && (cursorInfo.flags & CURSOR_SHOWING) == 0) {
+            do {
+                count = ShowCursor(TRUE);
+                adjusted++;
+            } while (count < 0 && adjusted < CURSOR_COUNTER_MAX_ATTEMPTS);
+        }
+    }
+
+    if (adjusted) {
+        LogMessage("Cursor restored (%s, count=%d, adjustments=%d)",
+                   reason ? reason : "unknown", count, adjusted);
+    }
+}
+
+// Hide the cursor for the screen saver, unless app UI (tray menu / settings
+// dialog) is active — in that case the cursor should stay visible.
+void HideCursorForScreenSaver(const char* reason) {
+    if (IsAppUiActive()) {
+        EnsureCursorVisible(reason ? reason : "app UI active");
+        return;
+    }
+
+    if (!g_app.cursorHidden) {
+        int count = ShowCursor(FALSE);
+        g_app.cursorHidden = 1;
+        LogMessage("Cursor hidden (%s, count=%d)", reason ? reason : "screen saver", count);
+    }
+}
 
 int ScaleDPI(int value) {
     return MulDiv(value, g_settingsDpi, 96);
@@ -1471,9 +1524,14 @@ void ShowScreenSaverOnMonitor(int monitorIndex, int isManual) {
             }
 
             if (sentEscapeKeys) {
-                for (int i = 0; i < g_monitorCount; i++) {
-                    g_monitorStates[i].lastInputTime = time(NULL);
-                }
+                // The Escape keys sent via SendInput update GetLastInputInfo,
+                // which would make the next timer tick think the user is active
+                // and deactivate the screen saver. Use the manual-activation
+                // cooldown to suppress deactivation for a short period, instead
+                // of resetting lastInputTime (which would also deactivate the
+                // monitor we just activated).
+                g_app.isManualActivation = 1;
+                g_app.manualActivationTime = GetTickCount();
             }
         }
     } else {
@@ -1534,11 +1592,7 @@ void ShowScreenSaverOnMonitor(int monitorIndex, int isManual) {
     }
 
     if (!g_app.config.perMonitorInputDetection) {
-        if (!g_app.cursorHidden) {
-            ShowCursor(FALSE);
-            g_app.cursorHidden = 1;
-            LogMessage("Cursor hidden");
-        }
+        HideCursorForScreenSaver("screen saver activation");
     }
 }
 
@@ -1615,11 +1669,7 @@ void HideScreenSaver() {
     g_app.manualActivationTime = 0;
     g_app.isManualActivation = 0;
 
-    if (g_app.cursorHidden) {
-        ShowCursor(TRUE);
-        g_app.cursorHidden = 0;
-        LogMessage("Cursor restored");
-    }
+    EnsureCursorVisible("screen saver hidden");
 }
 
 void EnsureScreenSaverTopmost() {
@@ -1692,6 +1742,8 @@ void AddTooltip(HWND hParent, HWND hControl, const char* text) {
 }
 
 void ShowSettingsDialog() {
+    EnsureCursorVisible("settings dialog opened");
+
     if (g_hSettingsDialog) {
         SetForegroundWindow(g_hSettingsDialog);
         return;
@@ -1984,11 +2036,7 @@ void ApplySettings(HWND hWnd) {
 
     if (!IsAnyMonitorActive()) {
         g_app.screenSaverActive = 0;
-        if (g_app.cursorHidden) {
-            ShowCursor(TRUE);
-            g_app.cursorHidden = 0;
-            LogMessage("Cursor restored (no active monitors)");
-        }
+        EnsureCursorVisible("no active monitors after settings");
     }
 
     if (!oldPerMonitor && g_app.config.perMonitorInputDetection) {
@@ -2209,16 +2257,10 @@ void HandleTimeout(WPARAM wParam) {
         int cursorOnActiveMonitor = (cursorMonitorIndex >= 0 && cursorMonitorIndex < g_monitorCount && g_monitorStates[cursorMonitorIndex].screenSaverActive);
 
         if (cursorOnActiveMonitor) {
-            if (!g_app.cursorHidden) {
-                ShowCursor(FALSE);
-                g_app.cursorHidden = 1;
-                LogMessage("Cursor hidden");
-            }
+            HideCursorForScreenSaver("cursor on active monitor");
         } else {
             if (g_app.cursorHidden) {
-                ShowCursor(TRUE);
-                g_app.cursorHidden = 0;
-                LogMessage("Cursor restored");
+                EnsureCursorVisible("cursor left active monitor");
             }
         }
 
@@ -2259,9 +2301,7 @@ void HandleTimeout(WPARAM wParam) {
                 g_app.screenSaverActive = IsAnyMonitorActive() ? 1 : 0;
 
                 if (!g_app.screenSaverActive && g_app.cursorHidden) {
-                    ShowCursor(TRUE);
-                    g_app.cursorHidden = 0;
-                    LogMessage("Cursor restored (no active monitors)");
+                    EnsureCursorVisible("no active monitors");
                 }
 
                 UpdateTrayIcon(g_app.screenSaverActive);
@@ -2369,10 +2409,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
             g_app.screenSaverActive = 0;
             UpdateTrayIcon(0);
 
-            if (g_app.cursorHidden) {
-                ShowCursor(TRUE);
-                g_app.cursorHidden = 0;
-            }
+            EnsureCursorVisible("display configuration changed");
 
             // Re-enumerate monitors to detect added/removed displays
             int oldMonitorCount = g_monitorCount;
@@ -2407,6 +2444,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
                 POINT pt;
                 GetCursorPos(&pt);
                 SetForegroundWindow(hWnd);
+                g_app.trayMenuActive = 1;
+                EnsureCursorVisible("tray menu opened");
 
                 HMENU hMenu = CreatePopupMenu();
                 AppendMenuA(hMenu, MF_STRING, IDM_SETTINGS, "Settings...");
@@ -2415,7 +2454,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
 
                 TrackPopupMenu(hMenu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hWnd, NULL);
                 DestroyMenu(hMenu);
+                g_app.trayMenuActive = 0;
+                EnsureCursorVisible("tray menu closed");
             } else if (lParam == WM_LBUTTONDOWN) {
+                EnsureCursorVisible("tray icon clicked");
                 if (g_hSettingsDialog) {
                     LogMessage("User: Left-clicked tray icon - settings dialog already open, bringing to foreground");
                     SetForegroundWindow(g_hSettingsDialog);
@@ -2451,11 +2493,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
         case WM_DESTROY:
             LogMessage("Application shutting down");
 
-            if (g_app.cursorHidden) {
-                ShowCursor(TRUE);
-                g_app.cursorHidden = 0;
-                LogMessage("Cursor restored on shutdown");
-            }
+            EnsureCursorVisible("shutdown");
 
             for (int i = 0; i < MAX_MONITOR_COUNT; i++) {
                 if (g_monitorStates[i].hScreenSaverWnd) {
