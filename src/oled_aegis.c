@@ -70,6 +70,7 @@ DEFINE_GUID(IID_IAudioMeterInformation,   0xC02216F6, 0x8C67, 0x4B5B, 0x9D, 0x00
 #define MEDIA_DETECTION_CACHE_MS        2000    // Cache media-window scans to keep timer work light
 #define AUDIO_ACTIVE_PEAK_THRESHOLD     0.0001f // Ignore paused/silent sessions that remain "active"
 #define CURSOR_COUNTER_MAX_ATTEMPTS     16      // Safety bound when normalizing ShowCursor's counter
+#define TOPMOST_REFRESH_INTERVAL_MS     5000    // Reassert topmost occasionally, not every timer tick
 #define MAX_ACTIVE_AUDIO_PIDS           64      // Upper bound on concurrently active audio sessions we track
 #define MAX_BROWSER_WINDOW_INFO         32      // Max browser windows to collect for diagnostic logging
 
@@ -2365,9 +2366,18 @@ void HandleTimeout(WPARAM wParam) {
         }
     }
 
-    // Ensure screen saver windows stay on top (handles notifications like MS Teams)
+    // Ensure screen saver windows stay on top (handles notifications like MS
+    // Teams, Steam friends, etc.), but throttle to avoid a SetWindowPos call
+    // every timer tick.
+    static DWORD lastTopmostRefresh = 0;
     if (IsAnyMonitorActive()) {
-        EnsureScreenSaverTopmost();
+        DWORD nowTick = GetTickCount();
+        if ((DWORD)(nowTick - lastTopmostRefresh) >= TOPMOST_REFRESH_INTERVAL_MS) {
+            EnsureScreenSaverTopmost();
+            lastTopmostRefresh = nowTick;
+        }
+    } else {
+        lastTopmostRefresh = 0;
     }
 }
 
