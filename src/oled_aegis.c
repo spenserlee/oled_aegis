@@ -528,6 +528,8 @@ LRESULT CALLBACK MonitorWindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARA
         }
         case WM_ERASEBKGND:
             return 1;
+        case WM_MOUSEACTIVATE:
+            return MA_NOACTIVATE;
         case WM_LBUTTONDOWN:
         case WM_RBUTTONDOWN:
         case WM_MBUTTONDOWN:
@@ -1559,6 +1561,10 @@ void ShowScreenSaverOnMonitor(int monitorIndex, int isManual) {
     if (g_monitorStates[monitorIndex].hScreenSaverWnd) {
         // Reposition and resize in case the pixel shift compensation setting changed since the
         // window was last created.
+        LONG_PTR exStyle = GetWindowLongPtrW(g_monitorStates[monitorIndex].hScreenSaverWnd, GWL_EXSTYLE);
+        if ((exStyle & WS_EX_NOACTIVATE) == 0) {
+            SetWindowLongPtrW(g_monitorStates[monitorIndex].hScreenSaverWnd, GWL_EXSTYLE, exStyle | WS_EX_NOACTIVATE);
+        }
         int pad = g_app.config.pixelShiftCompensation;
         SetWindowPos(g_monitorStates[monitorIndex].hScreenSaverWnd, HWND_TOPMOST,
                      g_monitors[monitorIndex].rect.left   - pad,
@@ -1566,7 +1572,7 @@ void ShowScreenSaverOnMonitor(int monitorIndex, int isManual) {
                      g_monitors[monitorIndex].rect.right  - g_monitors[monitorIndex].rect.left + pad * 2,
                      g_monitors[monitorIndex].rect.bottom - g_monitors[monitorIndex].rect.top  + pad * 2,
                      SWP_NOACTIVATE);
-        ShowWindow(g_monitorStates[monitorIndex].hScreenSaverWnd, SW_SHOW);
+        ShowWindow(g_monitorStates[monitorIndex].hScreenSaverWnd, SW_SHOWNOACTIVATE);
         UpdateWindow(g_monitorStates[monitorIndex].hScreenSaverWnd);
         g_monitorStates[monitorIndex].screenSaverActive = 1;
         LogMessage("Screen saver window shown on monitor %d (reused)", monitorIndex);
@@ -1575,8 +1581,8 @@ void ShowScreenSaverOnMonitor(int monitorIndex, int isManual) {
         // amount on all four sides. This ensures hardware pixel shift (used by some OLED panels
         // to reduce burn-in) cannot expose the desktop behind the screen saver window.
         int pad = g_app.config.pixelShiftCompensation;
-        HWND hWnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
-                                   L"OLEDAegisScreen", L"",
+        HWND hWnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                                    L"OLEDAegisScreen", L"",
                                    WS_POPUP,
                                    g_monitors[monitorIndex].rect.left   - pad,
                                    g_monitors[monitorIndex].rect.top    - pad,
@@ -1585,7 +1591,7 @@ void ShowScreenSaverOnMonitor(int monitorIndex, int isManual) {
                                    NULL, NULL, GetModuleHandle(NULL), NULL);
 
         if (hWnd) {
-            ShowWindow(hWnd, SW_SHOW);
+            ShowWindow(hWnd, SW_SHOWNOACTIVATE);
             UpdateWindow(hWnd);
             g_monitorStates[monitorIndex].hScreenSaverWnd = hWnd;
             g_monitorStates[monitorIndex].screenSaverActive = 1;
