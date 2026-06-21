@@ -51,6 +51,7 @@ DEFINE_GUID(IID_IAudioMeterInformation,   0xC02216F6, 0x8C67, 0x4B5B, 0x9D, 0x00
 #define IDC_INTERVAL_EDIT           1008
 #define IDC_PERMONITOR_CHECK        1009
 #define IDC_PERMONITOR_MEDIA_CHECK  1011
+#define IDC_MUTED_MEDIA_CHECK       1012
 #define IDC_PIXELSHIFT_EDIT         1010
 #define IDC_MONITOR_BASE            2000  // Monitor checkboxes: IDC_MONITOR_BASE + index
 
@@ -142,6 +143,7 @@ typedef struct {
     int debugMode;
     int perMonitorInputDetection;
     int perMonitorMediaDetection;
+    int blockOnMutedMedia;
     int pixelShiftCompensation;
 } Config;
 
@@ -195,6 +197,7 @@ void ClampConfigValues() {
     g_app.config.debugMode = g_app.config.debugMode ? 1 : 0;
     g_app.config.perMonitorInputDetection = g_app.config.perMonitorInputDetection ? 1 : 0;
     g_app.config.perMonitorMediaDetection = g_app.config.perMonitorMediaDetection ? 1 : 0;
+    g_app.config.blockOnMutedMedia = g_app.config.blockOnMutedMedia ? 1 : 0;
 }
 
 int IsAppUiActive() {
@@ -640,6 +643,8 @@ void LoadConfig() {
                     g_app.config.perMonitorInputDetection = atoi(value);
                 } else if (strcmp(key, "perMonitorMediaDetection") == 0) {
                     g_app.config.perMonitorMediaDetection = atoi(value);
+                } else if (strcmp(key, "blockOnMutedMedia") == 0) {
+                    g_app.config.blockOnMutedMedia = atoi(value);
                 } else if (strcmp(key, "pixelShiftCompensation") == 0) {
                     g_app.config.pixelShiftCompensation = atoi(value);
                 } else if (strncmp(key, "monitorEnabled_", 15) == 0) {
@@ -708,6 +713,7 @@ void SaveConfig() {
         fprintf(f, "debugMode=%d\n", g_app.config.debugMode);
         fprintf(f, "perMonitorInputDetection=%d\n", g_app.config.perMonitorInputDetection);
         fprintf(f, "perMonitorMediaDetection=%d\n", g_app.config.perMonitorMediaDetection);
+        fprintf(f, "blockOnMutedMedia=%d\n", g_app.config.blockOnMutedMedia);
         fprintf(f, "pixelShiftCompensation=%d\n", g_app.config.pixelShiftCompensation);
         // Save monitor settings using persistent device path as key, with comment showing friendly name
         for (int i = 0; i < g_monitorCount; i++) {
@@ -1391,9 +1397,28 @@ int UpdateMediaMonitorStates(int mediaOnMonitor[MAX_MONITOR_COUNT]) {
 
     int usedGlobalFallback = 0;
     int skippedFallbackForBrowser = 0;
+    int skippedFallbackForNoAudio = 0;
     if (mappedMonitorCount == 0) {
-        // No candidate window with active audio mapped to any monitor.
-        if (AllAudioActiveAreBrowsers(&ctx)) {
+        if (ctx.audioActiveProcessNameCount == 0) {
+            // ES_DISPLAY_REQUIRED is set but no audible audio is detected on the
+            // default render endpoint. This happens with muted video, OBS replay
+            // buffer, or other apps that call SetThreadExecutionState without
+            // producing audio.
+            if (g_app.config.blockOnMutedMedia) {
+                // User opted in to blocking on muted/silent media. Conservatively
+                // block all enabled monitors.
+                for (int i = 0; i < g_monitorCount; i++) {
+                    if (g_monitorStates[i].enabled) {
+                        mediaOnMonitor[i] = 1;
+                    }
+                }
+                usedGlobalFallback = 1;
+            } else {
+                // No audible media is playing, let the screen saver activate.
+                skippedFallbackForNoAudio = 1;
+                LogMessage("Media detection: ES_DISPLAY_REQUIRED set but no audible audio detected: skipping fallback");
+            }
+        } else if (AllAudioActiveAreBrowsers(&ctx)) {
             // All audio-active processes are known browsers, but no window title
             // matched a video hint. This typically means video is playing in a
             // background tab - the window title shows the active tab, not the
@@ -1405,8 +1430,8 @@ int UpdateMediaMonitorStates(int mediaOnMonitor[MAX_MONITOR_COUNT]) {
             LogMessage("Media detection: no title hint match, all audio-active processes are browsers: skipping fallback");
         } else {
             // Non-browser audio (unknown app, media player with minimized window,
-            // muted video, audio on non-default device). Conservatively block all
-            // enabled monitors to avoid covering playback.
+            // audio on non-default device). Conservatively block all enabled
+            // monitors to avoid covering playback.
             for (int i = 0; i < g_monitorCount; i++) {
                 if (g_monitorStates[i].enabled) {
                     mediaOnMonitor[i] = 1;
@@ -1435,8 +1460,8 @@ int UpdateMediaMonitorStates(int mediaOnMonitor[MAX_MONITOR_COUNT]) {
                        ctx.browserMatched[i] ? "MATCHED  " : "no hint  ",
                        ctx.browserTitles[i]);
         }
-        LogMessage("Media monitor detection: mask=0x%08X (activeAudioNames=%d, fallback=%d, browserSkip=%d, browserWindows=%d)",
-                   mask, ctx.audioActiveProcessNameCount, usedGlobalFallback, skippedFallbackForBrowser, ctx.browserWindowCount);
+        LogMessage("Media monitor detection: mask=0x%08X (activeAudioNames=%d, fallback=%d, browserSkip=%d, noAudioSkip=%d, browserWindows=%d)",
+                   mask, ctx.audioActiveProcessNameCount, usedGlobalFallback, skippedFallbackForBrowser, skippedFallbackForNoAudio, ctx.browserWindowCount);
         lastLoggedMask = mask;
     }
 
@@ -1907,6 +1932,11 @@ void ShowSettingsDialog() {
                      margin, y, checkboxWidth, controlHeight, g_hSettingsDialog, (HMENU)IDC_PERMONITOR_MEDIA_CHECK, hMod, NULL);
         y += rowHeight + ScaleDPI(5);
 
+        HWND hMutedMediaCheck = CreateWindowA("BUTTON", "Block During Muted Media",
+                     WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                     margin, y, checkboxWidth, controlHeight, g_hSettingsDialog, (HMENU)IDC_MUTED_MEDIA_CHECK, hMod, NULL);
+        y += rowHeight + ScaleDPI(5);
+
         HWND hMonitorsLabel = CreateWindowA("STATIC", "Monitors:",
                      WS_CHILD | WS_VISIBLE,
                      margin, y, ScaleDPI(100), controlHeight, g_hSettingsDialog, NULL, hMod, NULL);
@@ -1964,6 +1994,7 @@ void ShowSettingsDialog() {
             SendMessageA(hStartupCheck, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
             SendMessageA(hPerMonitorCheck, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
             SendMessageA(hPerMonitorMediaCheck, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
+            SendMessageA(hMutedMediaCheck, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
             SendMessageA(hPixelShiftLabel, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
             SendMessageA(hPixelShiftEdit, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
             SendMessageA(hPixelShiftUpDown, WM_SETFONT, (WPARAM)g_hSettingsFont, TRUE);
@@ -1979,7 +2010,7 @@ void ShowSettingsDialog() {
         AddTooltip(g_hSettingsDialog, hIntervalEdit,
                    "How often to poll for user activity. (250-10000ms).");
         AddTooltip(g_hSettingsDialog, hVideoCheck,
-                   "Prevent screen saver activation during video playback.");
+                   "Prevent screen saver activation during video playback (on any monitor).");
         AddTooltip(g_hSettingsDialog, hDebugCheck,
                    "Enable debug logging to %APPDATA%\\OLED_Aegis\\oled_aegis_debug.log");
         AddTooltip(g_hSettingsDialog, hStartupCheck,
@@ -1988,6 +2019,8 @@ void ShowSettingsDialog() {
                    "Track input separately for each monitor. Allows screen saver to activate on unused monitors while you continue using others.");
         AddTooltip(g_hSettingsDialog, hPerMonitorMediaCheck,
                    "Detect media playback per monitor instead of globally. Only blocks the screen saver on the monitor where media is actually playing, so playback on a non-OLED display won't keep the OLED awake.");
+        AddTooltip(g_hSettingsDialog, hMutedMediaCheck,
+                   "Block the screen saver even when media is muted or inaudible (e.g. muted video, OBS replay buffer). When off, only audible media prevents the screen saver.");
         AddTooltip(g_hSettingsDialog, hPixelShiftEdit,
                    "Expand the screen saver window beyond the monitor bounds by this many pixels on each side. "
                    "Use 4-8 on QD-OLED panels (e.g. Alienware) to prevent hardware pixel shift from exposing the desktop edge. (0 = disabled)");
@@ -2005,6 +2038,7 @@ void ShowSettingsDialog() {
         CheckDlgButton(g_hSettingsDialog, IDC_STARTUP_CHECK, g_app.config.startupEnabled ? BST_CHECKED : BST_UNCHECKED);
         CheckDlgButton(g_hSettingsDialog, IDC_PERMONITOR_CHECK, g_app.config.perMonitorInputDetection ? BST_CHECKED : BST_UNCHECKED);
         CheckDlgButton(g_hSettingsDialog, IDC_PERMONITOR_MEDIA_CHECK, g_app.config.perMonitorMediaDetection ? BST_CHECKED : BST_UNCHECKED);
+        CheckDlgButton(g_hSettingsDialog, IDC_MUTED_MEDIA_CHECK, g_app.config.blockOnMutedMedia ? BST_CHECKED : BST_UNCHECKED);
 
         sprintf_s(buffer, 32, "%d", g_app.config.pixelShiftCompensation);
         SetDlgItemTextA(g_hSettingsDialog, IDC_PIXELSHIFT_EDIT, buffer);
@@ -2033,12 +2067,14 @@ void ApplySettings(HWND hWnd) {
     int oldStartup = g_app.config.startupEnabled;
     int oldPerMonitor = g_app.config.perMonitorInputDetection;
     int oldPerMonitorMedia = g_app.config.perMonitorMediaDetection;
+    int oldBlockOnMutedMedia = g_app.config.blockOnMutedMedia;
 
     g_app.config.mediaDetectionEnabled = IsDlgButtonChecked(hWnd, IDC_MEDIA_CHECK) == BST_CHECKED;
     g_app.config.debugMode = IsDlgButtonChecked(hWnd, IDC_DEBUG_CHECK) == BST_CHECKED;
     g_app.config.startupEnabled = IsDlgButtonChecked(hWnd, IDC_STARTUP_CHECK) == BST_CHECKED;
     g_app.config.perMonitorInputDetection = IsDlgButtonChecked(hWnd, IDC_PERMONITOR_CHECK) == BST_CHECKED;
     g_app.config.perMonitorMediaDetection = IsDlgButtonChecked(hWnd, IDC_PERMONITOR_MEDIA_CHECK) == BST_CHECKED;
+    g_app.config.blockOnMutedMedia = IsDlgButtonChecked(hWnd, IDC_MUTED_MEDIA_CHECK) == BST_CHECKED;
 
     GetDlgItemTextA(hWnd, IDC_PIXELSHIFT_EDIT, buffer, 32);
     g_app.config.pixelShiftCompensation = atoi(buffer);
@@ -2077,7 +2113,7 @@ void ApplySettings(HWND hWnd) {
     SaveConfig();
     UpdateStartupRegistry();
 
-    LogMessage("Settings applied: timeout %ds->%ds, interval %dms->%dms, media %d->%d, debug %d->%d, startup %d->%d, perMonitor %d->%d, perMonitorMedia %d->%d, pixelShift %dpx",
+    LogMessage("Settings applied: timeout %ds->%ds, interval %dms->%dms, media %d->%d, debug %d->%d, startup %d->%d, perMonitor %d->%d, perMonitorMedia %d->%d, mutedMedia %d->%d, pixelShift %dpx",
              oldTimeout, g_app.config.idleTimeout,
              oldInterval, g_app.config.checkInterval,
              oldMedia, g_app.config.mediaDetectionEnabled,
@@ -2085,6 +2121,7 @@ void ApplySettings(HWND hWnd) {
              oldStartup, g_app.config.startupEnabled,
              oldPerMonitor, g_app.config.perMonitorInputDetection,
              oldPerMonitorMedia, g_app.config.perMonitorMediaDetection,
+             oldBlockOnMutedMedia, g_app.config.blockOnMutedMedia,
              g_app.config.pixelShiftCompensation);
 
     if (oldInterval != g_app.config.checkInterval) {
@@ -2147,8 +2184,9 @@ int HandleCreation(HWND hWnd) {
     g_app.config.startupEnabled = 0;
     g_app.config.debugMode = 0;
     g_app.config.perMonitorInputDetection = 0;
-    g_app.config.perMonitorMediaDetection = 1;
-    for (int i = 0; i < MAX_MONITOR_COUNT; i++) {
+            g_app.config.perMonitorMediaDetection = 1;
+            g_app.config.blockOnMutedMedia = 0;
+            for (int i = 0; i < MAX_MONITOR_COUNT; i++) {
         g_app.config.monitorsEnabled[i] = 1;
     }
 
