@@ -70,6 +70,7 @@ DEFINE_GUID(IID_IAudioMeterInformation,   0xC02216F6, 0x8C67, 0x4B5B, 0x9D, 0x00
 #define MIN_MEDIA_WINDOW_OVERLAP_RATIO  0.10    // Ignore thin window-border overlap onto adjacent monitors
 #define MEDIA_DETECTION_CACHE_MS        2000    // Cache media-window scans to keep timer work light
 #define AUDIO_ACTIVE_PEAK_THRESHOLD     0.0001f // Ignore paused/silent sessions that remain "active"
+#define AUDIO_GRACE_PERIOD_MS           10000   // Keep media state during brief audio silence (quiet passages)
 #define CURSOR_COUNTER_MAX_ATTEMPTS     16      // Safety bound when normalizing ShowCursor's counter
 #define TOPMOST_REFRESH_INTERVAL_MS     5000    // Reassert topmost occasionally, not every timer tick
 #define MAX_ACTIVE_AUDIO_PIDS           64      // Upper bound on concurrently active audio sessions we track
@@ -1333,6 +1334,7 @@ int UpdateMediaMonitorStates(int mediaOnMonitor[MAX_MONITOR_COUNT]) {
     static int hasCachedState = 0;
     static int cachedAnyMedia = 0;
     static int cachedMediaOnMonitor[MAX_MONITOR_COUNT] = {0};
+    static DWORD lastAudioDetectedTick = 0;
 
     for (int i = 0; i < MAX_MONITOR_COUNT; i++) {
         mediaOnMonitor[i] = 0;
@@ -1384,6 +1386,36 @@ int UpdateMediaMonitorStates(int mediaOnMonitor[MAX_MONITOR_COUNT]) {
     MediaEnumContext ctx = {0};
     ctx.audioActiveProcessNameCount = CollectActiveAudioProcessNames(
         ctx.audioActiveProcessNames, MAX_ACTIVE_AUDIO_PIDS);
+
+    if (ctx.audioActiveProcessNameCount > 0) {
+        lastAudioDetectedTick = nowTick;
+    } else if (hasCachedState && cachedAnyMedia &&
+               (DWORD)(nowTick - lastAudioDetectedTick) < AUDIO_GRACE_PERIOD_MS) {
+        // Audio was detected recently but this scan found no audible audio.
+        // This happens during quiet passages in video audio where the peak
+        // meter momentarily drops below threshold. Keep the previous media
+        // state to avoid flickering the screen saver on and off.
+        for (int i = 0; i < MAX_MONITOR_COUNT; i++) {
+            mediaOnMonitor[i] = cachedMediaOnMonitor[i];
+        }
+        hasCachedState = 1;
+        cachedAnyMedia = 1;
+        lastScanTick = nowTick;
+
+        DWORD mask = 0;
+        for (int i = 0; i < g_monitorCount && i < 32; i++) {
+            if (mediaOnMonitor[i]) {
+                mask |= (1u << i);
+            }
+        }
+        if (mask != lastLoggedMask) {
+            LogMessage("Media monitor detection: mask=0x%08X (grace period, %lums since last audio)",
+                       mask, (unsigned long)(nowTick - lastAudioDetectedTick));
+            lastLoggedMask = mask;
+        }
+        return 1;
+    }
+
     EnumWindows(EnumMediaWindowCallback, (LPARAM)&ctx);
 
     int mappedMonitorCount = 0;
