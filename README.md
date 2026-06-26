@@ -4,12 +4,11 @@ A Windows screen saver app tailored for OLED monitors.
 
 ## Why I made this
 
-Recently, I purchased my first OLED monitor and discovered that Windows 11
-built-in screen saver has some issues:
+I found that Windows 11 built-in screen saver had these issues:
 
 * Randomly not activating after putting the computer to sleep.
 * Breaks Bluetooth pause/play interactions when the screen saver is active.
-* **Does not provide a way to only turn on screen saver on one monitor in a
+* **No way to only turn on screen saver on one monitor in a
   multi-monitor setup.** (I only want to enable the screen saver on my OLED
   monitor)
 
@@ -31,10 +30,9 @@ For convenient access, you can place it in any folder and create a shortcut, or 
 
 * **Per-Monitor Control**: Enable screen saver on specific monitors only
 * **Per-Monitor Input Detection**: Optionally track input separately for each monitor, allowing unused monitors to activate screen saver while you continue using others
-* **Media Awareness**: Doesn't activate the screen saver if a video is playing
+* **Per-Monitor Media Awareness**: Detects media playback per monitor so the screen saver only activates on static screens
 * **Reliable Activation**: Consistently activates after system sleep/wake cycles
 * **Minimal Resource Usage**: Written in pure C with no external dependencies
-* **Simple Configuration**: Edit a plain text INI file or use the system tray menu
 * **System Tray Integration**: Taskbar icon for easy control
 * **Startup Support**: Automatically run when Windows starts
 
@@ -53,6 +51,8 @@ Configuration is stored in `%APPDATA%\OLED_Aegis\oled_aegis.ini`. This file is c
 * **startupEnabled**: Set to `1` to run at Windows startup, `0` to disable (default: 0)
 * **debugMode**: Set to `1` to enable debug logging to `%APPDATA%\OLED_Aegis\oled_aegis_debug.log`, `0` to disable (default: 0). **Note:** only for troubleshooting issues.
 * **perMonitorInputDetection**: Set to `1` to track input separately for each monitor (default: 0). When enabled, each monitor has its own idle timer based on mouse cursor position and focused window location. This allows the screen saver to activate on unused monitors while you continue working on others.
+* **perMonitorMediaDetection**: Set to `1` to detect media playback per monitor instead of globally (default: 1). Only blocks the screen saver on the monitor where media is actually playing, so playback on a non-OLED display won't keep the OLED awake.
+* **blockOnMutedMedia**: Set to `1` to block the screen saver even when media is muted or inaudible, e.g. muted video or OBS replay buffer (default: 0). When off, only audible media prevents the screen saver.
 * **monitorEnabled_\<device\>**: Set to `1` to enable screen saver on the specified monitor, `0` to disable (default: 1 for all).
 
 ## Usage
@@ -77,7 +77,10 @@ The screen saver will automatically deactivate from all monitors when:
 1. Any user input is detected
 2. Media starts playing (if `mediaDetectionEnabled=1`)
 
-#### Per-Monitor Mode (`perMonitorInputDetection=1`)
+#### Per-Monitor Media Mode (`perMonitorMediaDetection=1`)
+Media playback is detected per monitor. The screen saver is only blocked on the monitor where media is actually playing, so playback on a secondary monitor won't keep the OLED awake. Detection uses Windows audio session APIs to determine which process is producing audible audio, then maps the playing window to its monitor.
+
+#### Per-Monitor Input Mode (`perMonitorInputDetection=1`)
 Each enabled monitor has its own independent idle timer. Input is attributed to monitors based on:
 - **Mouse movement**: Updates the idle timer for the monitor where the cursor is located
 - **Keyboard input**: Updates the idle timer for the monitor containing the focused window, and also the monitor where the cursor is located
@@ -86,6 +89,10 @@ This allows you to:
 - Continue using one monitor while others activate their screen savers
 - Have different monitors timeout independently based on where you're actively working
 - Keep your OLED monitor protected while watching content on a secondary display
+
+## Known Limitations
+
+**Multi-window browser media disambiguation**: When the same browser (e.g. Brave) has video-site tabs open on multiple monitors and audio is playing in one of them, OLED Aegis may block the screen saver on all monitors whose browser windows have video-site title hints (e.g. "YouTube") — not just the monitor actually playing. This is because Windows exposes audio sessions per-process, and Chromium browsers' multi-process architecture maps all tab audio to a single browser process name, making it impossible to attribute audio to a specific tab/window via Win32 APIs. Workaround: don't leave video-site tabs open and focused on the OLED while playing video on another monitor of the same browser.
 
 ## Building
 
@@ -112,19 +119,4 @@ cl.exe src\oled_aegis.c /Fe:oled_aegis.exe /O2 /MD /link user32.lib shell32.lib 
 ```
 
 See [BUILD.md](BUILD.md) for more information.
-
-## Why didn't you just make a custom Screen Saver (`.scr`)?
-
-From my testing, it is not possible to have a real Windows screensaver (`.scr`
-launched by the OS) affect only one monitor while leaving the others showing
-their normal desktop / video playback.
-
-Even if a `.scr` program specifically draws on only one monitor, when Windows
-activates a screensaver due to timeout, Explorer switches into a screensaver
-mode and the desktop window manager creates an internal blank backdrop surface
-which is applied to *all* monitors.
-
-Also, one of the primary issues I had with the built-in screen saver was it's
-apparent disabling of Bluetooth media controls, so using the built-in screen
-saver wouldn't resolve this particular issue.
 

@@ -176,3 +176,19 @@ The compiled `oled_aegis.exe` is a standalone executable. You can:
 - No installation required
 
 The application will automatically create its config file in `%APPDATA%\OLED_Aegis\oled_aegis.ini` on first run.
+
+## Why didn't you just make a custom Screen Saver (`.scr`)?
+
+From my testing, it is not possible to have a real Windows screensaver (`.scr`
+launched by the OS) affect only one monitor while leaving the others showing
+their normal desktop / video playback.
+
+Even if a `.scr` program specifically draws on only one monitor, when Windows
+activates a screensaver due to timeout, Explorer switches into a screensaver
+mode and the desktop window manager creates an internal blank backdrop surface
+which is applied to *all* monitors.
+
+Also, one of the primary issues I had with the built-in screen saver was it's
+apparent disabling of Bluetooth media controls, so using the built-in screen
+saver wouldn't resolve this particular issue.
+
