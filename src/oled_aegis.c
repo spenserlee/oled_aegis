@@ -237,18 +237,37 @@ void EnsureCursorVisible(const char* reason) {
     }
 }
 
-// Hide the cursor for the screen saver, unless app UI (tray menu / settings
-// dialog) is active — in that case the cursor should stay visible.
 void HideCursorForScreenSaver(const char* reason) {
     if (IsAppUiActive()) {
         EnsureCursorVisible(reason ? reason : "app UI active");
         return;
     }
 
+    int adjusted = 0;
+    int count = 0;
+
     if (!g_app.cursorHidden) {
-        int count = ShowCursor(FALSE);
+        do {
+            count = ShowCursor(FALSE);
+            adjusted++;
+        } while (count >= 0 && adjusted < CURSOR_COUNTER_MAX_ATTEMPTS);
         g_app.cursorHidden = 1;
-        LogMessage("Cursor hidden (%s, count=%d)", reason ? reason : "screen saver", count);
+    } else {
+        // cursorHidden is already 1, but the counter may have drifted back up
+        // (e.g. from sleep/wake) so the cursor is actually visible.
+        CURSORINFO cursorInfo = {0};
+        cursorInfo.cbSize = sizeof(cursorInfo);
+        if (GetCursorInfo(&cursorInfo) && (cursorInfo.flags & CURSOR_SHOWING)) {
+            do {
+                count = ShowCursor(FALSE);
+                adjusted++;
+            } while (count >= 0 && adjusted < CURSOR_COUNTER_MAX_ATTEMPTS);
+        }
+    }
+
+    if (adjusted) {
+        LogMessage("Cursor hidden (%s, count=%d, adjustments=%d)",
+                   reason ? reason : "screen saver", count, adjusted);
     }
 }
 
